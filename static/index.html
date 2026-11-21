@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DriveRadar — Versões verificadas de drivers e Windows</title>
+  <meta name="description" content="Versões de drivers e atualizações do Windows verificadas em fontes rastreáveis.">
+  <meta name="google-adsense-account" content="ca-pub-7513394193260475">
+  <meta name="robots" content="index,follow">
+  <link rel="canonical" href="https://optlabs.com.br/driveradar/">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://optlabs.com.br/driveradar/">
+  <meta property="og:title" content="DriveRadar — Verificação cruzada de drivers">
+  <meta property="og:description" content="Veja versão, data, fontes, concordâncias, conflitos e histórico detalhado antes de atualizar.">
+  <meta property="og:image" content="https://optlabs.com.br/driveradar/static/logo.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="/driveradar/static/favicon-16.png" type="image/png">
+  <link rel="stylesheet" href="/driveradar/static/css/style.css?v=7.1.0">
+  <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7513394193260475" crossorigin="anonymous"></script>
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-36YL9QLC5K"></script>
+  <script src="/driveradar/static/js/analytics.js?v=1.0.0" defer></script>
+  <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"WebApplication","name":"DriveRadar","url":"https://optlabs.com.br/driveradar/","applicationCategory":"UtilitiesApplication","operatingSystem":"Windows","offers":{"@type":"Offer","price":"0","priceCurrency":"BRL"}}
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#conteudo" data-i18n="skip.content">Ir para o conteúdo</a>
+  <header class="site-header">
+    <a class="brand" href="/driveradar/" aria-label="DriveRadar">
+      <span class="brand-mark" aria-hidden="true">DR</span>
+      <span><strong>DriveRadar</strong><small data-i18n="brand.sub">verificação cruzada</small></span>
+    </a>
+    <nav class="header-nav" aria-label="Seções principais">
+      <a href="#drivers-section" data-i18n="nav.drivers">Drivers</a>
+      <a href="#alerts-section" data-i18n="nav.alerts">Alertas</a>
+      <a href="#history-section" data-i18n="nav.history">Histórico</a>
+      <a href="#sources-section" data-i18n="nav.sources">Fontes</a>
+    </nav>
+    <div class="header-actions">
+      <a class="download-app-button" href="/driveradar/updates/DriveRadar-Setup.exe" data-i18n="header.appWindows" data-i18n-title="header.appWindowsTitle" title="Baixar aplicativo Windows com notificações nativas e atualização automática">App Windows</a>
+      <button class="notification-button" id="notification-button" type="button" aria-describedby="notification-status">
+        <span aria-hidden="true">●</span><span id="notification-label" data-i18n="header.alertsConfig">Configurar alertas</span>
+      </button>
+      <select class="lang-select" id="lang-select" aria-label="Language / Idioma">
+        <option value="pt-BR">PT</option>
+        <option value="en">EN</option>
+        <option value="es">ES</option>
+        <option value="fr">FR</option>
+      </select>
+      <button class="icon-button" id="refresh-button" type="button" aria-label="Atualizar dados" data-i18n-title="header.refreshTitle" title="Atualizar dados agora">↻</button>
+      <button class="icon-button" id="theme-button" type="button" aria-label="Alternar tema" data-i18n-title="header.themeTitle" title="Alternar tema">◐</button>
+    </div>
+  </header>
+
+  <main id="conteudo">
+    <section class="hero" aria-labelledby="hero-title">
+      <div>
+        <p class="eyebrow" data-i18n="hero.eyebrow">CROSSOVER &amp; VERIFICAÇÃO</p>
+        <h1 id="hero-title"><span data-i18n="hero.title1">Atualize com evidência,</span><br><span data-i18n="hero.title2">não com suposição.</span></h1>
+        <p class="hero-copy" data-i18n="hero.copy">Versões, datas, notas oficiais e alertas cruzados entre fabricantes e publicações técnicas.</p>
+      </div>
+      <div class="system-state" aria-live="polite">
+        <span class="pulse" aria-hidden="true"></span>
+        <div>
+          <strong id="system-label" data-i18n="status.connecting">Conectando às fontes</strong>
+          <small id="updated-at" data-i18n="status.waitFirst">Aguarde a primeira verificação</small>
+          <small id="analysis-at" data-i18n="status.analysisWaiting">Análise técnica: aguardando</small>
+          <small id="notification-status" data-i18n="status.notifOff">Alertas do navegador desativados</small>
+        </div>
+      </div>
+    </section>
+
+    <section class="metrics" aria-label="Resumo da auditoria">
+      <article>
+        <small class="metric-label" data-i18n="metrics.reachable">Fontes acessíveis</small>
+        <span id="metric-reachable">—</span>
+        <small id="metric-reachable-sub" data-i18n="metrics.publishers">publishers independentes</small>
+      </article>
+      <article>
+        <small class="metric-label" data-i18n="metrics.primary">Confirmação primária</small>
+        <span id="metric-drivers">—</span>
+        <small id="metric-drivers-sub" data-i18n="metrics.vendorsVerified">fabricantes verificados</small>
+      </article>
+      <article>
+        <small class="metric-label" data-i18n="metrics.confidence">Confiança média</small>
+        <span id="metric-confidence">—</span>
+        <small id="metric-confidence-sub" data-i18n="metrics.confidenceSub">média determinística atual</small>
+      </article>
+      <article>
+        <small class="metric-label" data-i18n="metrics.conflicts">Conflitos &amp; alertas</small>
+        <span id="metric-conflicts">—</span>
+        <small id="metric-conflicts-sub">divergências e avisos</small>
+      </article>
+    </section>
+
+    <div id="error-box" class="notice error" role="alert" hidden></div>
+    <div id="loading" class="loading" role="status"><span aria-hidden="true"></span><span data-i18n="loading.text">Auditando fontes confiáveis…</span></div>
+
+    <section class="content-section" id="drivers-section" hidden>
+      <div class="section-heading">
+        <div><p class="eyebrow" data-i18n="drivers.eyebrow">VERSÕES ATUAIS</p><h2 data-i18n="drivers.title">Drivers e sistema</h2></div>
+        <p data-i18n="drivers.copy">O Crossover valida versão e data por concordância entre fontes primárias e publishers independentes.</p>
+      </div>
+      <div class="driver-grid" id="driver-grid"></div>
+    </section>
+
+    <section class="content-section split-section" id="alerts-section" hidden>
+      <div>
+        <div class="section-heading compact">
+          <div><p class="eyebrow" data-i18n="alerts.eyebrow">RISCO RECENTE</p><h2 data-i18n="alerts.title">Alertas relevantes</h2></div>
+          <div class="filter-pills" id="alert-filters" role="group" aria-label="Filtrar alertas por fabricante"></div>
+        </div>
+        <div class="alert-list" id="alert-list"></div>
+      </div>
+      <aside class="method-card">
+        <p class="eyebrow" data-i18n="method.eyebrow">COMO LER O CROSSOVER</p>
+        <h2 data-i18n="method.title">Confiança ≠ estabilidade</h2>
+        <p data-i18n="method.copy">O score confirma versão e data por regra determinística, considerando fonte primária, publishers independentes, conflitos e idade da coleta.</p>
+        <ul>
+          <li><span class="dot primary"></span><span data-i18n="method.li1">Fonte primária: fabricante ou autoridade (+72)</span></li>
+          <li><span class="dot independent"></span><span data-i18n="method.li2">Corroboração: publisher independente (+8 até +24)</span></li>
+          <li><span class="dot conflict"></span><span data-i18n="method.li3">Conflito: versão divergente ou hotfix mais novo (-20)</span></li>
+        </ul>
+      </aside>
+    </section>
+
+    <section class="content-section" id="history-section" hidden>
+      <div class="section-heading">
+        <div><p class="eyebrow" data-i18n="history.eyebrow">RASTREABILIDADE COMPLETA</p><h2 data-i18n="history.title">Histórico observado</h2></div>
+        <p data-i18n="history.copy">Até 24 versões verificadas por fabricante com canal, score do Crossover e resumo técnico.</p>
+      </div>
+      <div class="toolbar">
+        <div class="filter-pills" id="history-filters" role="group" aria-label="Filtrar histórico por fabricante"></div>
+        <label class="search-box">
+          <span class="sr-only">Buscar no histórico</span>
+          <input id="history-search" type="search" data-i18n-placeholder="history.search" placeholder="Filtrar por versão, KB, jogo, correção ou canal…" autocomplete="off">
+        </label>
+      </div>
+      <div class="history-grid" id="history-grid"></div>
+    </section>
+
+    <section class="content-section" id="sources-section" hidden>
+      <div class="section-heading">
+        <div><p class="eyebrow" data-i18n="sources.eyebrow">AUDITORIA ABERTA</p><h2 data-i18n="sources.title">Fontes consultadas</h2></div>
+        <p id="source-summary"></p>
+      </div>
+      <details class="source-details">
+        <summary data-i18n="sources.toggle">Ver todas as fontes e o estado da coleta</summary>
+        <div class="toolbar source-toolbar">
+          <div class="filter-pills" id="source-filters" role="group" aria-label="Filtrar fontes por estado"></div>
+          <label class="search-box">
+            <span class="sr-only">Buscar fonte</span>
+            <input id="source-search" type="search" data-i18n-placeholder="sources.search" placeholder="Buscar fonte ou publisher…" autocomplete="off">
+          </label>
+        </div>
+        <div class="source-list" id="source-list"></div>
+      </details>
+    </section>
+  </main>
+
+  <dialog class="history-dialog history-dialog-wide" id="history-dialog" aria-labelledby="history-dialog-title">
+    <div class="dialog-heading">
+      <div><p class="eyebrow" id="history-dialog-eyebrow" data-i18n="dialog.eyebrow">REGISTRO VERIFICADO</p><h2 id="history-dialog-title" data-i18n="dialog.title">Detalhes da versão</h2></div>
+      <button class="icon-button" id="history-dialog-close" type="button" aria-label="Fechar detalhes">×</button>
+    </div>
+    <div id="history-dialog-body"></div>
+  </dialog>
+
+  <dialog class="history-dialog alerts-dialog" id="alerts-dialog" aria-labelledby="alerts-dialog-title">
+    <div class="dialog-heading">
+      <div><p class="eyebrow" data-i18n="alertsDialog.eyebrow">PREFERÊNCIAS</p><h2 id="alerts-dialog-title" data-i18n="alertsDialog.title">Alertas do navegador</h2></div>
+      <button class="icon-button" id="alerts-dialog-close" type="button" aria-label="Fechar configurações">×</button>
+    </div>
+    <p class="dialog-copy" data-i18n="alertsDialog.copy">Escolha exatamente quais mudanças devem gerar uma notificação neste navegador.</p>
+    <form id="alerts-form">
+      <label class="alert-master"><input id="alerts-enabled" type="checkbox"> <span><strong data-i18n="alertsDialog.enable">Receber notificações</strong><small data-i18n="alertsDialog.enableDesc">Pode ser pausado sem alterar a permissão do navegador.</small></span></label>
+      <fieldset id="alert-categories">
+        <legend data-i18n="alertsDialog.categories">Categorias</legend>
+        <label class="alert-option select-all"><input id="alert-category-all" type="checkbox"> <span><strong data-i18n="alertsDialog.all">Tudo</strong><small data-i18n="alertsDialog.allDesc">Selecionar todas as categorias</small></span></label>
+        <div class="alert-options">
+          <label class="alert-option"><input type="checkbox" name="alert-category" value="nvidia"> <span><strong>NVIDIA</strong><small data-i18n="alertsDialog.nvDesc">Novas versões GeForce</small></span></label>
+          <label class="alert-option"><input type="checkbox" name="alert-category" value="amd"> <span><strong>AMD</strong><small data-i18n="alertsDialog.amdDesc">Novas versões Radeon</small></span></label>
+          <label class="alert-option"><input type="checkbox" name="alert-category" value="intel"> <span><strong>Intel</strong><small data-i18n="alertsDialog.intelDesc">Novas versões Arc</small></span></label>
+          <label class="alert-option"><input type="checkbox" name="alert-category" value="windows"> <span><strong>Windows</strong><small data-i18n="alertsDialog.winDesc">Novas atualizações do sistema</small></span></label>
+          <label class="alert-option"><input type="checkbox" name="alert-category" value="vulnerabilities"> <span><strong data-i18n="alertsDialog.vuln">Vulnerabilidades</strong><small data-i18n="alertsDialog.vulnDesc">Alertas recentes de segurança</small></span></label>
+        </div>
+      </fieldset>
+      <p class="form-error" id="alerts-form-error" role="alert" hidden></p>
+      <div class="dialog-actions"><button class="save-alerts" type="submit" data-i18n="alertsDialog.save">Salvar preferências</button></div>
+    </form>
+  </dialog>
+
+  <footer class="site-footer">
+    <p data-i18n="footer.copy">DriveRadar por OptLabs. Dados cruzados por regras verificáveis; decisão final sempre do usuário.</p>
+    <nav aria-label="Links legais"><a href="/driveradar/privacidade" data-i18n="footer.privacy">Privacidade</a><a href="/driveradar/termos" data-i18n="footer.terms">Termos</a></nav>
+  </footer>
+  <script src="/driveradar/static/js/i18n.js?v=1.0.0" defer></script>
+  <script src="/driveradar/static/js/app.js?v=7.1.0" defer></script>
+</body>
+</html>

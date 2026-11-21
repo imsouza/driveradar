@@ -1,0 +1,16 @@
+.env
+.secrets/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+cache/*.json
+cache/*.lock
+releases/
+desktop/node_modules/
+desktop/dist/
+bot_state.json
+history.json
+app_state.json
+*.tmp

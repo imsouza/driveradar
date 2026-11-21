@@ -1,0 +1,58 @@
+name: Build and Release DriveRadar Windows App
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci --no-audit --no-fund
+
+      - name: Syntax check desktop scripts
+        working-directory: desktop
+        run: npm run check
+
+      - name: Build Windows installer and portable binary
+        working-directory: desktop
+        run: npm run build:win
+
+      - name: Verify release artifacts
+        shell: pwsh
+        run: |
+          if (!(Test-Path "desktop/dist/latest.yml")) { throw "Missing latest.yml" }
+          Get-ChildItem desktop/dist -Include *.exe,*.blockmap,latest.yml -Recurse | Format-Table Name, Length
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: DriveRadar ${{ github.ref_name }} (Windows)
+          body: |
+            ## DriveRadar Desktop para Windows (${{ github.ref_name }})
+
+            - **Instalador (`DriveRadar-Setup-*.exe`)**: instalação por usuário com atalhos e **atualizações automáticas** via `https://optlabs.com.br/driveradar/updates/`.
+            - **Portátil (`DriveRadar-Portable-*.exe`)**: executável único sem instalação.
+            - **Bandeja do sistema + Notificações nativas**: minimize para o ícone da bandeja e receba alertas nativos do Windows quando surgir novo driver NVIDIA, AMD, Intel, atualização do Windows 11, hotfix ou alerta de segurança.
+          files: |
+            desktop/dist/latest.yml
+            desktop/dist/*.exe
+            desktop/dist/*.blockmap

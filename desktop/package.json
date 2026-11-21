@@ -1,0 +1,20 @@
+{
+  "name": "driveradar-desktop",
+  "version": "1.0.0",
+  "description": "DriveRadar Desktop para Windows — monitoramento minimalista de drivers e Windows 11 com bandeja, notificações nativas e atualização automática.",
+  "main": "src/main.js",
+  "author": "OptLabs",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check src/i18n.js && node --check src/main.js && node --check src/preload.js && node --check src/renderer/renderer.js",
+    "build:win": "electron-builder --config electron-builder.yml --win --x64 --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  }
+}

@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:;">
+  <title>DriveRadar</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <span class="brand-dot" aria-hidden="true"></span>
+        <div>
+          <strong>DriveRadar</strong>
+          <small id="app-version">v1.0.0</small>
+        </div>
+      </div>
+      <nav class="nav-list" aria-label="Navegação">
+        <button class="nav-item active" data-tab="drivers" type="button">Drivers</button>
+        <button class="nav-item" data-tab="history" type="button">Histórico</button>
+        <button class="nav-item" data-tab="alerts" type="button">Alertas</button>
+        <button class="nav-item" data-tab="settings" type="button">Configurações</button>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="sync-meta">
+          <span class="status-dot" id="sync-dot"></span>
+          <div>
+            <strong id="sync-status">Conectando…</strong>
+            <small id="sync-time">Aguardando auditoria</small>
+          </div>
+        </div>
+        <button class="btn-outline" id="btn-refresh" type="button">↻ Atualizar</button>
+      </div>
+    </aside>
+
+    <div class="main-area">
+      <div class="update-banner" id="update-banner" hidden>
+        <span id="update-banner-text"></span>
+        <div class="banner-actions">
+          <button class="btn-accent" id="banner-download" type="button" hidden>Baixar</button>
+          <button class="btn-accent" id="banner-install" type="button" hidden>Reiniciar e instalar</button>
+        </div>
+      </div>
+
+      <main class="content">
+        <section class="tab-panel active" id="tab-drivers">
+          <header class="panel-header">
+            <div>
+              <h1>Drivers e Sistema</h1>
+              <p id="drivers-subtitle">Versões confirmadas por verificação cruzada e notas oficiais.</p>
+            </div>
+          </header>
+          <div class="driver-grid" id="driver-grid"></div>
+        </section>
+
+        <section class="tab-panel" id="tab-history" hidden>
+          <header class="panel-header">
+            <div>
+              <h1>Histórico Observado</h1>
+              <p>Até 24 versões por fabricante com rolagem, notas oficiais e resumo técnico.</p>
+            </div>
+          </header>
+          <div class="toolbar">
+            <div class="filter-pills" id="history-filters"></div>
+            <input class="search-input" id="history-search" type="search" placeholder="Filtrar por versão, KB, jogo ou correção…">
+          </div>
+          <div class="history-grid" id="history-grid"></div>
+        </section>
+
+        <section class="tab-panel" id="tab-alerts" hidden>
+          <header class="panel-header">
+            <div>
+              <h1>Alertas Relevantes</h1>
+              <p>Vulnerabilidades, zero-days e regressões recentes filtradas para o seu ecossistema.</p>
+            </div>
+          </header>
+          <div class="toolbar">
+            <div class="filter-pills" id="alert-filters"></div>
+          </div>
+          <div class="alert-list" id="alert-list"></div>
+        </section>
+
+        <section class="tab-panel" id="tab-settings" hidden>
+          <header class="panel-header">
+            <div>
+              <h1>Configurações</h1>
+              <p>Preferências salvas automaticamente neste computador.</p>
+            </div>
+            <span class="save-toast" id="save-toast" hidden>Preferências salvas</span>
+          </header>
+          <div class="settings-stack" id="settings-container"></div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <dialog class="detail-dialog" id="history-dialog" aria-labelledby="dialog-title">
+    <div class="dialog-header">
+      <div>
+        <small id="dialog-eyebrow">REGISTRO VERIFICADO</small>
+        <h2 id="dialog-title">Detalhes</h2>
+      </div>
+      <button class="btn-icon" id="dialog-close" type="button" aria-label="Fechar">×</button>
+    </div>
+    <div id="dialog-body"></div>
+  </dialog>
+
+  <script src="../i18n.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

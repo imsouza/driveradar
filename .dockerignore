@@ -1,0 +1,15 @@
+.env
+.secrets
+.git
+.gitignore
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+cache
+bot_state.json
+history.json
+app_state.json
+test_design.py
+tests

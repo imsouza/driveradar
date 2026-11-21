@@ -1,0 +1,33 @@
+appId: br.com.optlabs.driveradar
+productName: DriveRadar
+copyright: Copyright © 2026 OptLabs
+directories:
+  output: dist
+  buildResources: assets
+files:
+  - src/**/*
+  - assets/**/*
+  - package.json
+win:
+  icon: assets/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: DriveRadar
+  uninstallDisplayName: DriveRadar
+  artifactName: DriveRadar-Setup-${version}.${ext}
+portable:
+  artifactName: DriveRadar-Portable-${version}.${ext}
+publish:
+  provider: generic
+  url: https://optlabs.com.br/driveradar/updates/
