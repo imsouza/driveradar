@@ -136,7 +136,7 @@ function localizeSummary(summary, lang) {
 
 function applyStaticLabels() {
   document.documentElement.lang = activeLang();
-  const navMap = { drivers: 'nav.drivers', history: 'nav.history', alerts: 'nav.alerts', settings: 'nav.settings' };
+  const navMap = { drivers: 'nav.drivers', history: 'nav.history', alerts: 'nav.alerts', settings: 'nav.settings', about: 'nav.about' };
   document.querySelectorAll('.nav-item').forEach((btn) => {
     if (navMap[btn.dataset.tab]) btn.textContent = tr(navMap[btn.dataset.tab]);
   });
@@ -152,6 +152,8 @@ function applyStaticLabels() {
   $('#tab-alerts .panel-header p').textContent = tr('alerts.subtitle');
   $('#tab-settings h1').textContent = tr('settings.title');
   $('#tab-settings .panel-header p').textContent = tr('settings.subtitle');
+  $('#tab-about h1').textContent = tr('about.title');
+  $('#tab-about .panel-header p').textContent = tr('about.subtitle');
   $('#save-toast').textContent = tr('settings.saved');
 }
 
@@ -557,8 +559,10 @@ async function updateSetting(partial) {
     applyStaticLabels();
     renderAll(currentData);
     renderSettings();
+    renderAbout();
   } else {
     renderDrivers(currentData);
+    renderAbout();
   }
   showSaveToast();
 }
@@ -737,6 +741,73 @@ function renderSettings() {
   root.append(gApp);
 }
 
+function renderAbout() {
+  const root = $('#about-container');
+  if (!root) return;
+  root.replaceChildren();
+
+  const methodSec = node('section', 'settings-group');
+  methodSec.append(node('p', 'about-eyebrow', tr('about.methodEyebrow')));
+  methodSec.append(node('h2', '', tr('about.confidenceTitle')));
+  methodSec.append(node('p', 'about-lead', tr('about.confidenceCopy')));
+  const mList = node('ul', 'method-list');
+  [
+    ['primary', tr('about.rulePrimary')],
+    ['independent', tr('about.ruleCorrob')],
+    ['conflict', tr('about.ruleConflict')],
+    ['stale', tr('about.ruleStale')]
+  ].forEach(([tone, text]) => {
+    const li = node('li');
+    li.append(node('span', `method-dot ${tone}`), node('span', '', text));
+    mList.append(li);
+  });
+  methodSec.append(mList);
+  root.append(methodSec);
+
+  const riskSec = node('section', 'settings-group');
+  riskSec.append(node('h2', '', tr('about.riskTitle')));
+  riskSec.append(node('p', 'about-lead', tr('about.riskCopy')));
+  const rList = node('ul', 'method-list');
+  [
+    ['critical', tr('about.riskCritical')],
+    ['stale', tr('about.riskHigh')],
+    ['independent', tr('about.riskModerate')],
+    ['primary', tr('about.riskLow')]
+  ].forEach(([tone, text]) => {
+    const li = node('li');
+    li.append(node('span', `method-dot ${tone}`), node('span', '', text));
+    rList.append(li);
+  });
+  riskSec.append(rList);
+  root.append(riskSec);
+
+  const appSec = node('section', 'settings-group');
+  appSec.append(node('h2', '', tr('about.appGroup')));
+  appSec.append(node('p', 'about-lead', tr('about.appDesc')));
+  const baseUrl = currentSettings?.apiBaseUrl || 'https://optlabs.com.br/driveradar';
+  const dl = node('dl', 'dl-grid');
+  [
+    [tr('about.version'), `v${currentAppInfo?.version || '1.2.0'}`],
+    [tr('about.platform'), currentAppInfo?.platform === 'win32' ? 'Windows (Electron)' : (currentAppInfo?.platform || 'Windows')],
+    [tr('about.server'), baseUrl]
+  ].forEach(([k, v]) => dl.append(node('dt', '', k), node('dd', '', v)));
+  appSec.append(dl);
+
+  const links = node('div', 'about-links');
+  [
+    [tr('about.openWeb'), `${baseUrl}/`],
+    [tr('about.privacy'), `${baseUrl}/privacidade`],
+    [tr('about.terms'), `${baseUrl}/termos`]
+  ].forEach(([label, href]) => {
+    const btn = node('button', 'btn-outline', label);
+    btn.type = 'button';
+    btn.addEventListener('click', () => window.driveRadar.openExternal(href));
+    links.append(btn);
+  });
+  appSec.append(links);
+  root.append(appSec);
+}
+
 function renderUpdaterBanner(status) {
   const banner = $('#update-banner');
   const text = $('#update-banner-text');
@@ -798,9 +869,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   currentSettings = await window.driveRadar.getSettings();
   document.documentElement.dataset.theme = currentSettings.theme || 'system';
   currentAppInfo = await window.driveRadar.getAppInfo();
-  $('#app-version').textContent = `v${currentAppInfo?.version || '1.0.0'}`;
+  $('#app-version').textContent = `v${currentAppInfo?.version || '1.2.0'}`;
   applyStaticLabels();
   renderSettings();
+  renderAbout();
   renderUpdaterBanner(currentAppInfo?.updater);
 
   try {

@@ -574,6 +574,25 @@ body {
 .time-range { display: inline-flex; align-items: center; gap: .4rem; font-size: .74rem; }
 .updater-box { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; padding-top: .5rem; }
 
+.about-eyebrow {
+  margin: 0 0 .25rem;
+  color: var(--muted);
+  font-size: .62rem;
+  font-weight: 750;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.about-lead { margin: 0 0 .85rem; color: var(--muted); font-size: .78rem; line-height: 1.55; }
+.method-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; font-size: .77rem; }
+.method-list li { display: flex; align-items: flex-start; gap: .55rem; }
+.method-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: .38rem; flex-shrink: 0; }
+.method-dot.primary { background: var(--teal); }
+.method-dot.independent { background: var(--blue); }
+.method-dot.conflict { background: var(--red); }
+.method-dot.stale { background: var(--amber); }
+.method-dot.critical { background: var(--critical-border); }
+.about-links { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .95rem; }
+
 .detail-dialog {
   width: min(680px, calc(100% - 32px));
   max-height: 86vh;

@@ -14,7 +14,7 @@
         <span class="brand-dot" aria-hidden="true"></span>
         <div>
           <strong>DriveRadar</strong>
-          <small id="app-version">v1.0.0</small>
+          <small id="app-version">v1.2.0</small>
         </div>
       </div>
       <nav class="nav-list" aria-label="Navegação">
@@ -22,6 +22,7 @@
         <button class="nav-item" data-tab="history" type="button">Histórico</button>
         <button class="nav-item" data-tab="alerts" type="button">Alertas</button>
         <button class="nav-item" data-tab="settings" type="button">Configurações</button>
+        <button class="nav-item" data-tab="about" type="button">Sobre</button>
       </nav>
       <div class="sidebar-footer">
         <div class="sync-meta">
@@ -91,6 +92,16 @@
             <span class="save-toast" id="save-toast" hidden>Preferências salvas</span>
           </header>
           <div class="settings-stack" id="settings-container"></div>
+        </section>
+
+        <section class="tab-panel" id="tab-about" hidden>
+          <header class="panel-header">
+            <div>
+              <h1>Sobre</h1>
+              <p>Como o DriveRadar verifica versões, calcula confiança e classifica riscos.</p>
+            </div>
+          </header>
+          <div class="settings-stack" id="about-container"></div>
         </section>
       </main>
     </div>

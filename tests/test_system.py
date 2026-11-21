@@ -567,6 +567,11 @@ class RegistryAndFrontendTests(unittest.TestCase):
             self.assertIn(marker, script + css)
             self.assertIn(marker, desktop_renderer + desktop_css)
 
+        desktop_html = (root / "desktop/src/renderer/index.html").read_text()
+        self.assertIn("tab-about", desktop_html)
+        self.assertIn("Confidence ≠ stability", desktop_i18n)
+        self.assertIn("renderAbout", desktop_renderer)
+
         legal_js = (root / "static/js/legal.js").read_text()
         self.assertNotIn("innerHTML", legal_js)
         for legal_name in ("privacidade.html", "termos.html"):
