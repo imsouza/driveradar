@@ -1,7 +1,7 @@
 {
   "name": "driveradar-desktop",
-  "version": "1.0.0",
-  "description": "DriveRadar Desktop para Windows — monitoramento minimalista de drivers e Windows 11 com bandeja, notificações nativas e atualização automática.",
+  "version": "1.1.0",
+  "description": "DriveRadar Desktop for Windows — minimalist NVIDIA, AMD, Intel, and Windows 11 update tracker with system tray, native notifications, risk scoring, and automatic updates.",
   "main": "src/main.js",
   "author": "OptLabs",
   "license": "MIT",

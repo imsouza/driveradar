@@ -1,20 +1,79 @@
-<!DOCTYPE html>
-<html lang="pt-br">
+<!doctype html>
+<html lang="pt-BR" data-title-key="privacy.pageTitle">
 <head>
-    <meta charset="UTF-8"><title>DriveRadar // Política de Privacidade</title>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap" rel="stylesheet">
-    <style>
-        body { background:#000; color:#a0a0a3; font-family:'JetBrains Mono',monospace; padding:40px; line-height:1.6; }
-        h1 { color:#fff; border-bottom:1px solid #262626; padding-bottom:10px; }
-        a { color:#00ff41; }
-    </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DriveRadar — Política de Privacidade</title>
+  <link rel="icon" href="/driveradar/static/favicon-16.png" type="image/png">
+  <link rel="stylesheet" href="/driveradar/static/css/style.css?v=7.2.0">
 </head>
 <body>
-    <h1>POLÍTICA_DE_PRIVACIDADE</h1>
-    <p>> O DriveRadar é uma ferramenta informativa. Não coletamos dados pessoais identificáveis dos usuários.</p>
-    <p>> Utilizamos Google Analytics 4 para medir páginas visitadas, interações e dados técnicos agregados.</p>
-    <p>> Cookies podem ser utilizados pelo Google Analytics e Google AdSense para métricas e exibição de anúncios.</p>
-    <p>> A preferência de notificações e os alertas já vistos ficam armazenados somente no navegador.</p>
-    <br><a href="/driveradar/">[ VOLTAR_AO_TERMINAL ]</a>
+  <header class="site-header">
+    <a class="brand" href="/driveradar/" aria-label="DriveRadar">
+      <span class="brand-mark" aria-hidden="true">DR</span>
+      <span><strong>DriveRadar</strong><small data-i18n="brand.sub">verificação cruzada</small></span>
+    </a>
+    <div class="header-actions">
+      <a class="download-app-button" href="/driveradar/updates/DriveRadar-Setup.exe" data-i18n="header.appWindows" data-i18n-title="header.appWindowsTitle" title="Baixar aplicativo Windows com notificações nativas e atualização automática">App Windows</a>
+      <select class="lang-select" id="lang-select" aria-label="Language / Idioma">
+        <option value="pt-BR">PT</option>
+        <option value="en">EN</option>
+        <option value="es">ES</option>
+        <option value="fr">FR</option>
+      </select>
+      <select class="theme-select" id="theme-select" aria-label="Theme / Tema" data-i18n-title="header.themeTitle" title="Escolher tema">
+        <option value="system" data-i18n="theme.system">Tema: Sistema</option>
+        <option value="dark" data-i18n="theme.dark">Grafite</option>
+        <option value="light" data-i18n="theme.light">Claro</option>
+        <option value="midnight" data-i18n="theme.midnight">Midnight OLED</option>
+        <option value="nord" data-i18n="theme.nord">Nordic</option>
+        <option value="forest" data-i18n="theme.forest">Emerald</option>
+        <option value="sand" data-i18n="theme.sand">Sand</option>
+      </select>
+    </div>
+  </header>
+
+  <main class="legal-main">
+    <article class="legal-card">
+      <p class="eyebrow" data-i18n="privacy.eyebrow">DOCUMENTO LEGAL</p>
+      <h1 data-i18n="privacy.title">Política de Privacidade</h1>
+      <p class="legal-lead" data-i18n="privacy.lead">Como o DriveRadar lida com telemetria, preferências locais, cookies e serviços de terceiros.</p>
+
+      <section class="legal-section">
+        <h2 data-i18n="privacy.h1">1. Coleta mínima de dados</h2>
+        <p data-i18n="privacy.p1">O DriveRadar é uma plataforma informativa que consulta fontes públicas de fabricantes e publicações técnicas. Não exigimos cadastro nem coletamos dados pessoais identificáveis dos visitantes.</p>
+      </section>
+
+      <section class="legal-section">
+        <h2 data-i18n="privacy.h2">2. Google Analytics e AdSense</h2>
+        <p data-i18n="privacy.p2">O painel web utiliza Google Analytics 4 para métricas agregadas de navegação e Google AdSense para exibição de anúncios. Esses serviços podem utilizar cookies conforme as políticas de privacidade do Google.</p>
+      </section>
+
+      <section class="legal-section">
+        <h2 data-i18n="privacy.h3">3. Armazenamento local</h2>
+        <p data-i18n="privacy.p3">Suas preferências de idioma, tema visual, alertas do navegador e versões já visualizadas são armazenadas exclusivamente no navegador via localStorage. No aplicativo desktop para Windows, suas configurações e cache ficam salvos localmente em seu computador.</p>
+      </section>
+
+      <section class="legal-section">
+        <h2 data-i18n="privacy.h4">4. Links externos</h2>
+        <p data-i18n="privacy.p4">Ao abrir downloads oficiais, notas de lançamento ou matérias técnicas citadas, você será direcionado a sites externos operados pelos respectivos fabricantes e publishers.</p>
+      </section>
+
+      <div class="legal-actions">
+        <a class="legal-back" href="/driveradar/" data-i18n="privacy.back">← Voltar para o painel</a>
+      </div>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <p data-i18n="footer.copy">DriveRadar por OptLabs. Dados cruzados por regras verificáveis; decisão final sempre do usuário.</p>
+    <nav aria-label="Links legais">
+      <a href="/driveradar/privacidade" data-i18n="footer.privacy">Privacidade</a>
+      <a href="/driveradar/termos" data-i18n="footer.terms">Termos</a>
+    </nav>
+  </footer>
+
+  <script src="/driveradar/static/js/i18n.js?v=2.0.0" defer></script>
+  <script src="/driveradar/static/js/legal.js?v=1.0.0" defer></script>
 </body>
 </html>

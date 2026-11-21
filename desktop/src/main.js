@@ -127,7 +127,7 @@ function mergeSettings(raw) {
     closeToTray: typeof input.closeToTray === 'boolean' ? input.closeToTray : settings.closeToTray,
     minimizeToTray: typeof input.minimizeToTray === 'boolean' ? input.minimizeToTray : settings.minimizeToTray,
     language: ['system', ...SUPPORTED_LANGS].includes(input.language) ? input.language : settings.language,
-    theme: ['system', 'dark', 'light'].includes(input.theme) ? input.theme : settings.theme,
+    theme: ['system', 'dark', 'light', 'midnight', 'nord', 'forest', 'sand'].includes(input.theme) ? input.theme : settings.theme,
     autoCheckUpdates: typeof input.autoCheckUpdates === 'boolean' ? input.autoCheckUpdates : settings.autoCheckUpdates,
     autoDownloadUpdates: typeof input.autoDownloadUpdates === 'boolean' ? input.autoDownloadUpdates : settings.autoDownloadUpdates
   };
@@ -144,7 +144,13 @@ function applyStartupSetting() {
 }
 
 function applyThemeSetting() {
-  nativeTheme.themeSource = settings.theme === 'dark' || settings.theme === 'light' ? settings.theme : 'system';
+  if (settings.theme === 'light' || settings.theme === 'sand') {
+    nativeTheme.themeSource = 'light';
+  } else if (settings.theme === 'system') {
+    nativeTheme.themeSource = 'system';
+  } else {
+    nativeTheme.themeSource = 'dark';
+  }
 }
 
 function isQuietHoursNow() {
@@ -286,8 +292,17 @@ function processNotifications(data) {
       nextVersions[v] = ver;
       const skipPreview = settings.ignoreBetaPreview && isPreviewOrBeta(item.channel);
       if (canNotify && settings.vendors[v] && prev && !skipPreview) {
-        const rec = data?.advisor?.assessments?.[v]?.recommendation?.action;
-        const recText = rec === 'install' ? msg('notif.recInstall') : rec === 'do_not_install' ? msg('notif.recDoNotInstall') : msg('notif.recWait');
+        const lang = curLang();
+        const assess = data?.advisor?.assessments?.[v];
+        const tblock = lang !== 'pt-BR' ? assess?.translations?.[lang] : null;
+        const rec = assess?.recommendation?.action;
+        const isCritical = rec === 'do_not_install' || assess?.risk_assessment?.level === 'critical';
+        const recReason = tblock?.reason || assess?.recommendation?.reason || '';
+        const recText = isCritical
+          ? msg('notif.recCritical', { reason: recReason })
+          : rec === 'install'
+            ? msg('notif.recInstall')
+            : msg('notif.recWait');
         fireNotification(
           msg('notif.newVerTitle', { vendor: VENDOR_LABELS[v], version: ver }),
           `${item.channel ? `${item.channel} · ` : ''}${recText}`,
@@ -355,6 +370,16 @@ async function fetchLatestData(isManual = false) {
       if (isManual) return cachedData;
     }
     throw err;
+  }
+}
+
+function scheduleUpdateChecks() {
+  if (updateTimer) {
+    clearInterval(updateTimer);
+    updateTimer = null;
+  }
+  if (settings.autoCheckUpdates) {
+    updateTimer = setInterval(() => checkForAppUpdates(false), 6 * 3_600_000);
   }
 }
 
@@ -485,15 +510,17 @@ function registerIpc() {
     return fetchLatestData(false);
   });
   ipcMain.handle('data:refresh', async () => fetchLatestData(true));
-  ipcMain.handle('history:entry', async (_event, vendor, version) => {
+  ipcMain.handle('history:entry', async (_event, vendor, version, lang) => {
     if (!VENDORS.includes(vendor) || !version) throw new Error('Invalid params');
-    const url = `${settings.apiBaseUrl}/api/history/${encodeURIComponent(vendor)}/${encodeURIComponent(version)}`;
+    const reqLang = SUPPORTED_LANGS.includes(lang) ? lang : curLang();
+    const url = `${settings.apiBaseUrl}/api/history/${encodeURIComponent(vendor)}/${encodeURIComponent(version)}?lang=${encodeURIComponent(reqLang)}`;
     return fetchJson(url);
   });
   ipcMain.handle('settings:get', () => settings);
   ipcMain.handle('settings:save', (_event, partial) => {
     const prevPoll = settings.pollIntervalMinutes;
     const prevUrl = settings.apiBaseUrl;
+    const prevAutoCheck = settings.autoCheckUpdates;
     settings = mergeSettings(partial);
     writeJsonAtomic(userFile('settings.json'), settings);
     applyStartupSetting();
@@ -503,6 +530,10 @@ function registerIpc() {
     if (settings.pollIntervalMinutes !== prevPoll || settings.apiBaseUrl !== prevUrl) {
       schedulePoll();
       if (settings.apiBaseUrl !== prevUrl) fetchLatestData(true).catch(() => {});
+    }
+    if (settings.autoCheckUpdates !== prevAutoCheck) {
+      scheduleUpdateChecks();
+      if (settings.autoCheckUpdates) checkForAppUpdates(false).catch(() => {});
     }
     return settings;
   });
@@ -569,9 +600,9 @@ if (!app.requestSingleInstanceLock()) {
     fetchLatestData(false).catch(() => {});
     schedulePoll();
 
+    scheduleUpdateChecks();
     if (settings.autoCheckUpdates) {
       setTimeout(() => checkForAppUpdates(false), 15_000);
-      updateTimer = setInterval(() => checkForAppUpdates(false), 6 * 3_600_000);
     }
   });
 

@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from service import VENDORS, DriveRadarService
+from service import SUPPORTED_LANGS, VENDORS, DriveRadarService, localize_payload
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 service = DriveRadarService()
@@ -62,17 +62,19 @@ async def security_headers(request, call_next):
 
 
 @web.get("/api/data")
-async def get_data(response: Response):
+async def get_data(response: Response, lang: str | None = None):
     response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=300"
-    return await service.get_data()
+    payload = await service.get_data()
+    return localize_payload(payload, lang)
 
 
 @web.get("/api/history/{vendor}/{version:path}")
-async def get_history_entry(vendor: str, version: str, response: Response):
+async def get_history_entry(vendor: str, version: str, response: Response, lang: str = "pt-BR"):
     clean_vendor = vendor.strip().lower()
     if clean_vendor not in VENDORS:
         raise HTTPException(status_code=404, detail="Vendor not found")
-    entry = await service.enrich_history_entry(clean_vendor, version.strip())
+    clean_lang = lang.strip() if lang and lang.strip() in SUPPORTED_LANGS else "pt-BR"
+    entry = await service.enrich_history_entry(clean_vendor, version.strip(), lang=clean_lang)
     if not entry:
         raise HTTPException(status_code=404, detail="History version not found")
     response.headers["Cache-Control"] = "public, max-age=300"

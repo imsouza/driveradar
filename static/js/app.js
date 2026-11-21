@@ -27,6 +27,8 @@ const I18N = window.DriveRadarI18n || {
 };
 const tr = (key, vars = null, fallback = '') => I18N.t(key, vars, fallback);
 
+const VALID_THEMES = ['system', 'dark', 'light', 'midnight', 'nord', 'forest', 'sand'];
+
 let latestData = null;
 let notificationRegistration = null;
 let activeAlertVendor = 'all';
@@ -34,6 +36,109 @@ let activeHistoryVendor = 'all';
 let historySearchQuery = '';
 let activeSourceFilter = 'all';
 let sourceSearchQuery = '';
+let openDialogContext = null;
+
+function localizeBreakdownLabel(step) {
+  const code = step?.code;
+  if (!code) return step?.label || '';
+  if (code === 'independent_publishers') {
+    const count = Number(step.count || 1);
+    return tr(count === 1 ? 'breakdown.independent_publishers' : 'breakdown.independent_publishersPlural', { count }, step.label);
+  }
+  if (code === 'version_conflicts') {
+    const count = Number(step.count || 1);
+    return tr(count === 1 ? 'breakdown.version_conflicts' : 'breakdown.version_conflictsPlural', { count }, step.label);
+  }
+  return tr(`breakdown.${code}`, null, step.label);
+}
+
+function localizeChannel(channel) {
+  const raw = String(channel || '').trim();
+  if (!raw) return '';
+  const low = raw.toLowerCase();
+  if (low.includes('preview opcional')) return tr('channel.previewD', null, raw);
+  if (low.includes('segurança (b)') || low.includes('seguranca (b)')) return tr('channel.securityB', null, raw);
+  if (low.includes('emergencial') || low.includes('out-of-band')) return tr('channel.outOfBand', null, raw);
+  return raw;
+}
+
+function localizeRecConfidence(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'alta' || raw === 'high' || raw === 'élevée') return tr('conf.high', null, value);
+  if (raw === 'media' || raw === 'média' || raw === 'moderate' || raw === 'medium' || raw === 'moderada' || raw === 'modérée') return tr('conf.medium', null, value);
+  if (raw === 'baixa' || raw === 'low' || raw === 'baja' || raw === 'faible') return tr('conf.low', null, value);
+  return value || '';
+}
+
+function resolveRisk(obj) {
+  if (!obj || typeof obj !== 'object') {
+    return { level: 'moderate', score: 38, categories: [], critical_reasons: [], action: 'wait' };
+  }
+  const ra = obj.risk_assessment && typeof obj.risk_assessment === 'object' ? obj.risk_assessment : null;
+  const rawAction = obj.recommendation?.action || obj.recommendation_action || 'wait';
+  const rawLevel = String(ra?.level || obj.risk_level || '').toLowerCase();
+  let score = ra?.score !== undefined && ra?.score !== null
+    ? Number(ra.score)
+    : obj.risk_score !== undefined && obj.risk_score !== null
+      ? Number(obj.risk_score)
+      : (rawLevel === 'critical' || rawAction === 'do_not_install' ? 90 : rawLevel === 'high' ? 65 : rawAction === 'install' ? 15 : 38);
+  const categories = Array.isArray(ra?.categories) ? ra.categories : (Array.isArray(obj.risk_categories) ? obj.risk_categories : []);
+  const criticalReasons = Array.isArray(ra?.critical_reasons) ? ra.critical_reasons : (Array.isArray(obj.critical_reasons) ? obj.critical_reasons : []);
+  const isCritical = rawLevel === 'critical' || rawAction === 'do_not_install' || score >= 80;
+  const level = isCritical ? 'critical' : ['high', 'moderate', 'low'].includes(rawLevel) ? rawLevel : (score >= 55 ? 'high' : score >= 25 ? 'moderate' : 'low');
+  const action = isCritical ? 'do_not_install' : rawAction;
+  return {
+    level,
+    score: Number.isFinite(score) ? Math.max(0, Math.min(100, Math.round(score))) : (isCritical ? 90 : 38),
+    categories,
+    critical_reasons: criticalReasons,
+    action
+  };
+}
+
+function localizeAssessment(assessment, lang) {
+  if (!assessment || typeof assessment !== 'object') return assessment;
+  const tblock = lang && lang !== 'pt-BR' ? assessment.translations?.[lang] : null;
+  const out = {
+    ...assessment,
+    recommendation: assessment.recommendation ? { ...assessment.recommendation } : undefined,
+    risk_assessment: assessment.risk_assessment ? { ...assessment.risk_assessment } : undefined
+  };
+  if (tblock && typeof tblock === 'object') {
+    if (tblock.headline) out.headline = tblock.headline;
+    if (tblock.summary) out.summary = tblock.summary;
+    if (out.recommendation) {
+      if (tblock.target_audience) out.recommendation.target_audience = tblock.target_audience;
+      if (tblock.reason) out.recommendation.reason = tblock.reason;
+    }
+    if (out.risk_assessment && Array.isArray(tblock.critical_reasons) && tblock.critical_reasons.length) {
+      out.risk_assessment.critical_reasons = tblock.critical_reasons;
+    }
+    ['highlights', 'positive_signals', 'risk_signals', 'watch_items'].forEach((group) => {
+      if (Array.isArray(out[group]) && Array.isArray(tblock[group])) {
+        out[group] = out[group].map((item, idx) => (tblock[group][idx] ? { ...item, text: tblock[group][idx] } : item));
+      }
+    });
+  }
+  return out;
+}
+
+function localizeSummary(summary, lang) {
+  if (!summary || typeof summary !== 'object') return summary;
+  const tblock = lang && lang !== 'pt-BR' ? summary.translations?.[lang] : null;
+  if (!tblock || typeof tblock !== 'object') return summary;
+  return {
+    ...summary,
+    headline: tblock.headline || summary.headline,
+    summary: tblock.summary || summary.summary,
+    recommendation_reason: tblock.recommendation_reason || summary.recommendation_reason,
+    critical_reasons: Array.isArray(tblock.critical_reasons) && tblock.critical_reasons.length ? tblock.critical_reasons : summary.critical_reasons,
+    highlights: Array.isArray(tblock.highlights) && tblock.highlights.length ? tblock.highlights : summary.highlights,
+    fixed_issues: Array.isArray(tblock.fixed_issues) && tblock.fixed_issues.length ? tblock.fixed_issues : summary.fixed_issues,
+    known_issues: Array.isArray(tblock.known_issues) && tblock.known_issues.length ? tblock.known_issues : summary.known_issues,
+    watch_items: Array.isArray(tblock.watch_items) && tblock.watch_items.length ? tblock.watch_items : summary.watch_items
+  };
+}
 
 function node(tag, className, text) {
   const element = document.createElement(tag);
@@ -138,7 +243,7 @@ function renderCrossover(data) {
     const list = node('ul', 'breakdown-list');
     breakdown.forEach((step) => {
       const li = node('li');
-      li.append(node('span', '', step.label));
+      li.append(node('span', '', localizeBreakdownLabel(step)));
       const sign = step.delta > 0 ? `+${step.delta}` : String(step.delta);
       li.append(node('span', `breakdown-delta ${step.kind || 'neutral'}`, `${sign} pts`));
       list.append(li);
@@ -205,7 +310,8 @@ function renderStructuredFallbackSignals(structured) {
   return details;
 }
 
-function renderTechnicalReview(assessment, advisorStatus = 'pending', structuredNotes = null) {
+function renderTechnicalReview(rawAssessment, advisorStatus = 'pending', structuredNotes = null) {
+  const assessment = localizeAssessment(rawAssessment, I18N.getLang());
   const ready = assessment?.status === 'ready';
   const processing = advisorStatus === 'pending';
   const risks = assessment?.risk_signals || [];
@@ -223,21 +329,39 @@ function renderTechnicalReview(assessment, advisorStatus = 'pending', structured
     reason: processing ? tr('review.waitDefault') : tr('review.waitUnavailable')
   });
 
+  const riskInfo = resolveRisk({ ...assessment, recommendation });
+  const action = ready ? riskInfo.action : recommendation.action || 'wait';
+  const isCritical = ready && (riskInfo.level === 'critical' || action === 'do_not_install');
   const actionLabels = {
     install: tr('action.install', null, 'Instalar'),
     wait: tr('action.wait', null, 'Aguardar'),
-    do_not_install: tr('action.do_not_install', null, 'Não instalar')
+    do_not_install: tr('action.do_not_install', null, 'Crítico — Não instalar')
   };
   const block = node('section', `technical-note ${ready ? 'ready' : 'pending'}`);
-  const verdict = node('div', `verdict ${recommendation.action || 'wait'}`);
+  const verdictClass = isCritical ? 'verdict critical do_not_install' : `verdict ${action}${riskInfo.level === 'high' ? ' high' : ''}`;
+  const verdict = node('div', verdictClass);
   const verdictTop = node('div', 'verdict-top');
   verdictTop.append(node('small', '', tr('review.verdict', null, 'RECOMENDAÇÃO')));
-  if (recommendation.confidence) {
-    verdictTop.append(node('span', 'pill muted', tr('review.confidence', { val: recommendation.confidence })));
+  const badges = node('div', 'verdict-badges');
+  if (isCritical) {
+    badges.append(node('span', 'critical-badge', tr('action.criticalBadge', null, 'CRÍTICO')));
   }
+  if (ready && assessment?.risk_assessment?.level) {
+    const levelLabel = tr(`risk.${riskInfo.level}`, null, riskInfo.level);
+    badges.append(node('span', `risk-pill risk-${riskInfo.level}`, tr('risk.scoreLabel', { level: levelLabel, score: riskInfo.score })));
+  }
+  if (recommendation.confidence) {
+    badges.append(node('span', 'pill muted', tr('review.confidence', { val: localizeRecConfidence(recommendation.confidence) })));
+  }
+  verdictTop.append(badges);
   verdict.append(verdictTop);
-  verdict.append(node('strong', '', actionLabels[recommendation.action] || tr('action.wait', null, 'Aguardar')));
+  verdict.append(node('strong', '', actionLabels[action] || tr('action.wait', null, 'Aguardar')));
   verdict.append(node('p', '', recommendation.reason));
+  if (isCritical && riskInfo.critical_reasons.length) {
+    const crList = node('ul', 'critical-reasons-list');
+    riskInfo.critical_reasons.forEach((reason) => crList.append(node('li', '', reason)));
+    verdict.append(crList);
+  }
   if (recommendation.target_audience) {
     verdict.append(node('p', 'target-audience', tr('review.target', { val: recommendation.target_audience })));
   }
@@ -319,7 +443,8 @@ function renderDriver(vendor, data, assessment, advisorStatus) {
   const verification = data.verification || {};
   const score = Number(verification.score || 0);
   const tone = confidenceTone(score);
-  const card = node('article', `driver-card ${vendor}`);
+  const riskInfo = resolveRisk(localizeAssessment(assessment, I18N.getLang()));
+  const card = node('article', `driver-card ${vendor}${assessment?.status === 'ready' && riskInfo.level === 'critical' ? ' risk-critical' : ''}`);
 
   const heading = node('div', 'card-heading');
   const identity = node('div', 'driver-identity');
@@ -342,7 +467,7 @@ function renderDriver(vendor, data, assessment, advisorStatus) {
   const meta = node('div', 'version-meta');
   const rel = relativeDaysLabel(data.release_date);
   const parts = [`${formatDate(data.release_date)}${rel ? ` (${rel})` : ''}`];
-  if (data.channel) parts.push(data.channel);
+  if (data.channel) parts.push(localizeChannel(data.channel));
   if (data.os_build) parts.push(`Build ${data.os_build}`);
   if (data.file_size) parts.push(data.file_size);
   meta.append(node('span', '', parts.join(' · ')));
@@ -476,7 +601,8 @@ function renderAlerts(alerts) {
   });
 }
 
-function renderHistorySummarySections(summary, fallbackVerification) {
+function renderHistorySummarySections(rawSummary, fallbackVerification) {
+  const summary = localizeSummary(rawSummary, I18N.getLang());
   const fragment = document.createDocumentFragment();
   if (summary) {
     const recSec = node('div', 'dialog-section');
@@ -485,11 +611,27 @@ function renderHistorySummarySections(summary, fallbackVerification) {
       wait: tr('action.wait'),
       do_not_install: tr('action.do_not_install')
     };
-    const action = summary.recommendation_action || 'wait';
-    const verdict = node('div', `verdict ${action}`);
-    verdict.append(node('small', '', tr('dialog.recTitle')));
+    const riskInfo = resolveRisk(summary);
+    const action = riskInfo.action || 'wait';
+    const isCritical = riskInfo.level === 'critical' || action === 'do_not_install';
+    const verdict = node('div', isCritical ? 'verdict critical do_not_install' : `verdict ${action}${riskInfo.level === 'high' ? ' high' : ''}`);
+    const verdictTop = node('div', 'verdict-top');
+    verdictTop.append(node('small', '', tr('dialog.recTitle')));
+    const badges = node('div', 'verdict-badges');
+    if (isCritical) badges.append(node('span', 'critical-badge', tr('action.criticalBadge', null, 'CRÍTICO')));
+    if (summary.risk_level) {
+      const levelLabel = tr(`risk.${riskInfo.level}`, null, riskInfo.level);
+      badges.append(node('span', `risk-pill risk-${riskInfo.level}`, tr('risk.scoreLabel', { level: levelLabel, score: riskInfo.score })));
+    }
+    verdictTop.append(badges);
+    verdict.append(verdictTop);
     verdict.append(node('strong', '', actionLabels[action] || tr('action.wait')));
     verdict.append(node('p', '', summary.recommendation_reason || ''));
+    if (isCritical && riskInfo.critical_reasons.length) {
+      const crList = node('ul', 'critical-reasons-list');
+      riskInfo.critical_reasons.forEach((reason) => crList.append(node('li', '', reason)));
+      verdict.append(crList);
+    }
     recSec.append(verdict);
     if (summary.headline) recSec.append(node('h3', '', summary.headline));
     if (summary.summary) recSec.append(node('p', 'dialog-summary-text', summary.summary));
@@ -532,7 +674,7 @@ function renderHistorySummarySections(summary, fallbackVerification) {
       const list = node('ul', 'breakdown-list');
       fallbackVerification.breakdown.forEach((step) => {
         const li = node('li');
-        li.append(node('span', '', step.label));
+        li.append(node('span', '', localizeBreakdownLabel(step)));
         const sign = step.delta > 0 ? `+${step.delta}` : String(step.delta);
         li.append(node('span', `breakdown-delta ${step.kind || 'neutral'}`, `${sign} pts`));
         list.append(li);
@@ -563,10 +705,14 @@ function populateHistoryDialog(vendor, item, index, isLoading = false) {
 
   const strip = node('div', 'dialog-strip');
   strip.append(node('span', isCurrent ? 'pill teal' : 'pill muted', isCurrent ? tr('history.current') : `#${index + 1}`));
-  if (item.channel) strip.append(node('span', 'pill', item.channel));
+  if (item.channel) strip.append(node('span', 'pill', localizeChannel(item.channel)));
   if (item.os_build) strip.append(node('span', 'pill muted', `Build ${item.os_build}`));
   if (item.verification?.score !== undefined && item.verification?.score !== null) {
     strip.append(node('span', 'pill teal', `Crossover ${item.verification.score}%`));
+  }
+  const rsRisk = item.release_summary ? resolveRisk(item.release_summary) : null;
+  if (rsRisk && (rsRisk.level === 'critical' || rsRisk.action === 'do_not_install')) {
+    strip.append(node('span', 'pill critical', tr('action.criticalBadge', null, 'CRÍTICO')));
   }
   body.append(strip);
 
@@ -583,7 +729,7 @@ function populateHistoryDialog(vendor, item, index, isLoading = false) {
   const rows = [
     [tr('dialog.version'), item.version || '—'],
     [tr('dialog.releaseDate'), formatDate(item.date)],
-    [tr('dialog.channel'), item.channel || '—'],
+    [tr('dialog.channel'), localizeChannel(item.channel) || '—'],
     [tr('dialog.firstSeen'), formatDate(item.first_seen_at || item.verified_at, true)],
     [tr('dialog.lastVerified'), formatDate(item.verified_at, true)],
     [tr('dialog.sourceReg'), item.source_name || 'Vendor'],
@@ -625,13 +771,16 @@ function populateHistoryDialog(vendor, item, index, isLoading = false) {
 
 async function openHistoryDetails(vendor, item, index) {
   const dialog = $('#history-dialog');
-  const needsEnrich = !item.release_summary?.enriched_at;
+  const lang = I18N.getLang();
+  openDialogContext = { vendor, item, index };
+  const needsEnrich = !item.release_summary?.enriched_at
+    || (lang !== 'pt-BR' && !item.release_summary?.translations?.[lang]);
   populateHistoryDialog(vendor, item, index, needsEnrich);
   if (!dialog.open) dialog.showModal();
 
   if (!needsEnrich || !item.version) return;
   try {
-    const resp = await fetch(`/driveradar/api/history/${encodeURIComponent(vendor)}/${encodeURIComponent(item.version)}`);
+    const resp = await fetch(`/driveradar/api/history/${encodeURIComponent(vendor)}/${encodeURIComponent(item.version)}?lang=${encodeURIComponent(lang)}`);
     if (!resp.ok) {
       populateHistoryDialog(vendor, item, index, false);
       return;
@@ -641,6 +790,7 @@ async function openHistoryDetails(vendor, item, index) {
       const idx = latestData.history[vendor].findIndex((h) => h.version === enriched.version);
       if (idx !== -1) latestData.history[vendor][idx] = enriched;
     }
+    openDialogContext = { vendor, item: enriched, index };
     if (dialog.open) {
       populateHistoryDialog(vendor, enriched, index, false);
       renderHistory(latestData?.history || {});
@@ -670,10 +820,11 @@ function renderHistoryFilters(history) {
 
 function matchesHistorySearch(item, query) {
   if (!query) return true;
-  const rs = item.release_summary || {};
+  const rs = localizeSummary(item.release_summary, I18N.getLang()) || {};
   const haystack = [
     item.version,
     item.channel,
+    localizeChannel(item.channel),
     item.os_build,
     item.date,
     rs.headline,
@@ -689,14 +840,15 @@ function renderHistory(history) {
   renderHistoryFilters(history || {});
   const grid = $('#history-grid');
   grid.replaceChildren();
+  const lang = I18N.getLang();
   const query = historySearchQuery.trim().toLowerCase();
   const vendors = activeHistoryVendor === 'all' ? Object.keys(LABELS) : [activeHistoryVendor];
   const actionLabels = {
     install: tr('action.install'),
     wait: tr('action.wait'),
-    do_not_install: tr('action.avoid')
+    do_not_install: tr('action.criticalBadge', null, 'CRÍTICO')
   };
-  const actionTone = { install: 'teal', wait: 'amber', do_not_install: 'red' };
+  const actionTone = { install: 'teal', wait: 'amber', do_not_install: 'critical' };
 
   vendors.forEach((vendor) => {
     const box = node('article', 'history-card');
@@ -729,18 +881,20 @@ function renderHistory(history) {
       const delta = nextItem ? daysBetween(item.date, nextItem.date) : null;
       const dateParts = [formatDate(item.date)];
       if (delta !== null) dateParts.push(`+${delta}d`);
-      if (item.channel) dateParts.push(item.channel);
+      if (item.channel) dateParts.push(localizeChannel(item.channel));
       if (item.os_build) dateParts.push(`Build ${item.os_build}`);
       main.append(node('small', '', dateParts.join(' · ')));
 
-      const headline = item.release_summary?.headline;
+      const localSummary = localizeSummary(item.release_summary, lang);
+      const headline = localSummary?.headline;
       if (headline) main.append(node('div', 'history-snippet', headline));
 
       const metaCol = node('div', 'history-row-meta');
       const isCurrent = item.version === currentVersion;
       metaCol.append(node('span', `tag-action ${isCurrent ? 'current' : ''}`, isCurrent ? tr('history.current') : tr('history.detailsLink')));
-      if (item.release_summary?.recommendation_action) {
-        const act = item.release_summary.recommendation_action;
+      if (localSummary?.recommendation_action || localSummary?.risk_level) {
+        const riskInfo = resolveRisk(localSummary);
+        const act = riskInfo.level === 'critical' ? 'do_not_install' : (localSummary.recommendation_action || 'wait');
         metaCol.append(node('span', `pill ${actionTone[act] || 'muted'}`, actionLabels[act] || act));
       }
       button.append(main, metaCol);
@@ -1067,14 +1221,30 @@ async function loadData(isManual = false) {
   }
 }
 
+function applyTheme(pref) {
+  const effective = pref === 'system'
+    ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+    : pref;
+  document.documentElement.dataset.theme = VALID_THEMES.includes(effective) ? effective : 'dark';
+}
+
 function initTheme() {
   const saved = localStorage.getItem('driveradar-theme');
-  const initial = saved || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-  document.documentElement.dataset.theme = initial;
-  $('#theme-button').addEventListener('click', () => {
-    const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
-    document.documentElement.dataset.theme = next;
-    localStorage.setItem('driveradar-theme', next);
+  const pref = VALID_THEMES.includes(saved) ? saved : 'system';
+  applyTheme(pref);
+  const select = $('#theme-select');
+  if (select) {
+    select.value = pref;
+    select.addEventListener('change', (event) => {
+      const next = VALID_THEMES.includes(event.target.value) ? event.target.value : 'system';
+      localStorage.setItem('driveradar-theme', next);
+      applyTheme(next);
+    });
+  }
+  const mq = matchMedia('(prefers-color-scheme: light)');
+  mq.addEventListener('change', () => {
+    const currentPref = localStorage.getItem('driveradar-theme') || 'system';
+    if (currentPref === 'system') applyTheme('system');
   });
 }
 
@@ -1088,6 +1258,10 @@ function initLanguage() {
     I18N.applyStatic();
     setNotificationState();
     if (latestData) renderAll(latestData);
+    if (openDialogContext && $('#history-dialog')?.open) {
+      const freshItem = findHistoryItem(openDialogContext.vendor, openDialogContext.item?.version) || openDialogContext.item;
+      openHistoryDetails(openDialogContext.vendor, freshItem, openDialogContext.index);
+    }
   });
 }
 
@@ -1107,6 +1281,9 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#history-dialog-close').addEventListener('click', () => $('#history-dialog').close());
   $('#history-dialog').addEventListener('click', (event) => {
     if (event.target === $('#history-dialog')) $('#history-dialog').close();
+  });
+  $('#history-dialog').addEventListener('close', () => {
+    openDialogContext = null;
   });
   loadData();
   window.setInterval(() => loadData(false), 60_000);

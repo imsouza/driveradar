@@ -10,7 +10,7 @@ function subscribe(channel, callback) {
 contextBridge.exposeInMainWorld('driveRadar', {
   getData: () => ipcRenderer.invoke('data:get'),
   refreshNow: () => ipcRenderer.invoke('data:refresh'),
-  getHistoryEntry: (vendor, version) => ipcRenderer.invoke('history:entry', vendor, version),
+  getHistoryEntry: (vendor, version, lang) => ipcRenderer.invoke('history:entry', vendor, version, lang),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (partial) => ipcRenderer.invoke('settings:save', partial),
   testNotification: () => ipcRenderer.invoke('notify:test'),

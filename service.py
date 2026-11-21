@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from advisor import AIAdvisorPool
+from advisor import SUPPORTED_LANGS, TRANSLATION_TARGET_LANGS, AIAdvisorPool, evaluate_risk_policy
 from monitor import OFFICIAL_URLS, UpdateMonitor
 from sources import SOURCES, SourceHub, parse_version_tuple
 
@@ -64,18 +64,20 @@ def build_verification(
     breakdown: list[dict[str, Any]] = []
     if has_primary:
         base_score = 72
-        breakdown.append({"label": "Confirmação em fonte primária / fabricante", "delta": 72, "kind": "positive"})
+        breakdown.append({"code": "primary_confirmed", "label": "Confirmação em fonte primária / fabricante", "delta": 72, "kind": "positive"})
     elif agreements:
         base_score = 42
-        breakdown.append({"label": "Apenas fontes secundárias (sem confirmação primária)", "delta": 42, "kind": "neutral"})
+        breakdown.append({"code": "secondary_only", "label": "Apenas fontes secundárias (sem confirmação primária)", "delta": 42, "kind": "neutral"})
     else:
         base_score = 0
-        breakdown.append({"label": "Nenhuma confirmação disponível", "delta": 0, "kind": "negative"})
+        breakdown.append({"code": "no_confirmation", "label": "Nenhuma confirmação disponível", "delta": 0, "kind": "negative"})
 
     corrob_points = min(24, max(0, len(agreements) - 1) * 8)
     if corrob_points > 0:
         extra_pubs = max(0, len(agreements) - 1)
         breakdown.append({
+            "code": "independent_publishers",
+            "count": extra_pubs,
             "label": f"+{extra_pubs} publisher{'es' if extra_pubs > 1 else ''} independente{'s' if extra_pubs > 1 else ''} concordante{'s' if extra_pubs > 1 else ''}",
             "delta": corrob_points,
             "kind": "positive",
@@ -84,6 +86,8 @@ def build_verification(
     conflict_penalty = min(50, len(conflicts) * 20)
     if conflict_penalty > 0:
         breakdown.append({
+            "code": "version_conflicts",
+            "count": len(conflicts),
             "label": f"{len(conflicts)} conflito{'s' if len(conflicts) > 1 else ''} de versão detectado{'s' if len(conflicts) > 1 else ''}",
             "delta": -conflict_penalty,
             "kind": "negative",
@@ -92,6 +96,7 @@ def build_verification(
     stale_penalty = 20 if stale else 0
     if stale_penalty:
         breakdown.append({
+            "code": "stale_data",
             "label": "Usando último registro válido persistido (stale)",
             "delta": -stale_penalty,
             "kind": "negative",
@@ -224,18 +229,97 @@ def _summary_from_assessment(assessment: dict[str, Any], enriched_at: int | None
     if not isinstance(assessment, dict) or assessment.get("status") != "ready":
         return None
     rec = assessment.get("recommendation") or {}
+    risk = assessment.get("risk_assessment") or {}
+    raw_translations = assessment.get("translations") or {}
+    translations: dict[str, dict[str, Any]] = {}
+    for lang in TRANSLATION_TARGET_LANGS:
+        tblock = raw_translations.get(lang)
+        if isinstance(tblock, dict) and tblock.get("headline") and tblock.get("summary"):
+            translations[lang] = {
+                "headline": tblock.get("headline") or "",
+                "summary": tblock.get("summary") or "",
+                "recommendation_reason": tblock.get("reason") or "",
+                "critical_reasons": list(tblock.get("critical_reasons") or []),
+                "highlights": list(tblock.get("highlights") or []),
+                "fixed_issues": list(tblock.get("positive_signals") or []),
+                "known_issues": list(tblock.get("risk_signals") or []),
+                "watch_items": list(tblock.get("watch_items") or []),
+            }
     return {
         "headline": assessment.get("headline"),
         "summary": assessment.get("summary"),
+        "risk_level": risk.get("level") or ("critical" if rec.get("action") == "do_not_install" else "moderate"),
+        "risk_score": risk.get("score") if risk.get("score") is not None else (90 if rec.get("action") == "do_not_install" else 38),
+        "risk_categories": list(risk.get("categories") or []),
+        "critical_reasons": list(risk.get("critical_reasons") or []),
         "recommendation_action": rec.get("action") or "wait",
         "recommendation_reason": rec.get("reason") or "",
         "highlights": [item.get("text") for item in (assessment.get("highlights") or []) if item.get("text")],
         "fixed_issues": [item.get("text") for item in (assessment.get("positive_signals") or []) if item.get("text")],
         "known_issues": [item.get("text") for item in (assessment.get("risk_signals") or []) if item.get("text")],
         "watch_items": [item.get("text") for item in (assessment.get("watch_items") or []) if item.get("text")],
+        "translations": translations,
         "citations": assessment.get("citations") or [],
         "enriched_at": enriched_at or int(time.time()),
     }
+
+
+def _project_summary_lang(summary: dict[str, Any] | None, lang: str) -> dict[str, Any] | None:
+    if not isinstance(summary, dict) or lang not in TRANSLATION_TARGET_LANGS:
+        return summary
+    tblock = (summary.get("translations") or {}).get(lang)
+    if not isinstance(tblock, dict):
+        return summary
+    projected = copy.deepcopy(summary)
+    for field in ("headline", "summary", "recommendation_reason"):
+        if tblock.get(field):
+            projected[field] = tblock[field]
+    for list_field in ("critical_reasons", "highlights", "fixed_issues", "known_issues", "watch_items"):
+        if isinstance(tblock.get(list_field), list) and (tblock.get(list_field) or not projected.get(list_field)):
+            projected[list_field] = list(tblock[list_field])
+    return projected
+
+
+def localize_payload(payload: dict[str, Any], lang: str | None) -> dict[str, Any]:
+    """Project cached advisor & history text to the requested supported language when available."""
+    if not isinstance(payload, dict) or lang not in TRANSLATION_TARGET_LANGS:
+        return payload
+    localized = copy.deepcopy(payload)
+    assessments = (localized.get("advisor") or {}).get("assessments") or {}
+    for assessment in assessments.values():
+        if not isinstance(assessment, dict):
+            continue
+        tblock = (assessment.get("translations") or {}).get(lang)
+        if not isinstance(tblock, dict):
+            continue
+        if tblock.get("headline"):
+            assessment["headline"] = tblock["headline"]
+        if tblock.get("summary"):
+            assessment["summary"] = tblock["summary"]
+        rec = assessment.get("recommendation")
+        if isinstance(rec, dict):
+            if tblock.get("target_audience"):
+                rec["target_audience"] = tblock["target_audience"]
+            if tblock.get("reason"):
+                rec["reason"] = tblock["reason"]
+        risk = assessment.get("risk_assessment")
+        if isinstance(risk, dict) and isinstance(tblock.get("critical_reasons"), list) and tblock.get("critical_reasons"):
+            risk["critical_reasons"] = list(tblock["critical_reasons"])
+        for group in ("highlights", "positive_signals", "risk_signals", "watch_items"):
+            translated_items = tblock.get(group)
+            canonical_items = assessment.get(group)
+            if isinstance(translated_items, list) and isinstance(canonical_items, list):
+                for idx, txt in enumerate(translated_items[:len(canonical_items)]):
+                    if txt and isinstance(canonical_items[idx], dict):
+                        canonical_items[idx]["text"] = txt
+
+    for entries in (localized.get("history") or {}).values():
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, dict) and isinstance(entry.get("release_summary"), dict):
+                entry["release_summary"] = _project_summary_lang(entry["release_summary"], lang)
+    return localized
 
 
 def migrate_state(raw: Any) -> dict[str, Any]:
@@ -824,9 +908,10 @@ class DriveRadarService:
                         self._cache["history"] = updated_state["history"]
                     self._write_shared_snapshot(self._cache)
 
-    async def enrich_history_entry(self, vendor: str, version: str) -> dict[str, Any] | None:
+    async def enrich_history_entry(self, vendor: str, version: str, lang: str = "pt-BR") -> dict[str, Any] | None:
         if vendor not in VENDORS:
             return None
+        clean_lang = lang if lang in SUPPORTED_LANGS else "pt-BR"
         lock = self._history_locks.setdefault((vendor, version), asyncio.Lock())
         async with lock:
             state = await asyncio.to_thread(self.store.read)
@@ -838,10 +923,49 @@ class DriveRadarService:
                 return None
 
             existing_summary = entry.get("release_summary") or {}
-            if existing_summary.get("enriched_at") and (
-                existing_summary.get("summary") or existing_summary.get("highlights") or existing_summary.get("fixed_issues")
-            ):
-                return entry
+            has_content = bool(
+                existing_summary.get("enriched_at")
+                and (
+                    existing_summary.get("summary")
+                    or existing_summary.get("highlights")
+                    or existing_summary.get("fixed_issues")
+                )
+            )
+            if has_content:
+                existing_translations = existing_summary.get("translations") if isinstance(existing_summary.get("translations"), dict) else {}
+                missing_langs = [code for code in TRANSLATION_TARGET_LANGS if code not in existing_translations]
+                needs_risk = not existing_summary.get("risk_level")
+                needs_translation = clean_lang in missing_langs
+
+                if not needs_risk and not needs_translation:
+                    return entry
+
+                updated_summary = copy.deepcopy(existing_summary)
+                if needs_risk:
+                    policy = evaluate_risk_policy(updated_summary, driver_info={"channel": entry.get("channel")})
+                    risk = policy["risk_assessment"]
+                    updated_summary["risk_level"] = risk["level"]
+                    updated_summary["risk_score"] = risk["score"]
+                    updated_summary["risk_categories"] = risk["categories"]
+                    updated_summary["critical_reasons"] = risk["critical_reasons"]
+                    updated_summary["recommendation_action"] = policy["action"]
+                if missing_langs and self.advisor.enabled:
+                    translated = await asyncio.to_thread(
+                        self.advisor.translate_history_summary, updated_summary, tuple(TRANSLATION_TARGET_LANGS)
+                    )
+                    if translated:
+                        updated_summary["translations"] = {**existing_translations, **translated}
+
+                new_state = await asyncio.to_thread(
+                    self.store.save_history_summary, vendor, version, updated_summary
+                )
+                async with self._refresh_lock:
+                    if self._cache:
+                        self._cache["history"] = new_state["history"]
+                        self._write_shared_snapshot(self._cache)
+                return next(
+                    (i for i in new_state["history"][vendor] if i["version"] == version), entry
+                )
 
             # Check if live advisor already holds a ready assessment for this exact version.
             if self._cache:
@@ -899,17 +1023,19 @@ class DriveRadarService:
 
     async def enrich_history_batch(self, limit: int = 6) -> int:
         state = await asyncio.to_thread(self.store.read)
-        candidates: list[tuple[int, str, str]] = []
+        candidates: list[tuple[int, str, str, str]] = []
         for vendor in VENDORS:
             for idx, item in enumerate(state.get("history", {}).get(vendor, [])):
                 rs = item.get("release_summary") or {}
-                if not rs.get("enriched_at"):
-                    candidates.append((idx, vendor, item["version"]))
+                trs = rs.get("translations") if isinstance(rs.get("translations"), dict) else {}
+                missing_lang = next((code for code in TRANSLATION_TARGET_LANGS if code not in trs), None)
+                if not rs.get("enriched_at") or not rs.get("risk_level") or missing_lang:
+                    candidates.append((idx, vendor, item["version"], missing_lang or "en"))
         candidates.sort(key=lambda row: row[0])
         enriched = 0
-        for _, vendor, version in candidates[:limit]:
+        for _, vendor, version, req_lang in candidates[:limit]:
             try:
-                res = await self.enrich_history_entry(vendor, version)
+                res = await self.enrich_history_entry(vendor, version, lang=req_lang)
                 if res and (res.get("release_summary") or {}).get("enriched_at"):
                     enriched += 1
             except Exception as exc:

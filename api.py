@@ -9,7 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 
-from service import VENDORS, DriveRadarService
+from service import SUPPORTED_LANGS, VENDORS, DriveRadarService, localize_payload
 
 app = FastAPI(title="DriveRadar API", version="3.0.0", docs_url=None, redoc_url=None)
 service = DriveRadarService(use_shared_snapshot=True)
@@ -44,16 +44,18 @@ async def health():
 
 
 @app.get("/api/data")
-async def get_data(_: str = Depends(require_api_key)):
-    return await service.get_data()
+async def get_data(lang: str | None = None, _: str = Depends(require_api_key)):
+    payload = await service.get_data()
+    return localize_payload(payload, lang)
 
 
 @app.get("/api/history/{vendor}/{version:path}")
-async def get_history_entry(vendor: str, version: str, _: str = Depends(require_api_key)):
+async def get_history_entry(vendor: str, version: str, lang: str = "pt-BR", _: str = Depends(require_api_key)):
     clean_vendor = vendor.strip().lower()
     if clean_vendor not in VENDORS:
         raise HTTPException(status_code=404, detail="Vendor not found")
-    entry = await service.enrich_history_entry(clean_vendor, version.strip())
+    clean_lang = lang.strip() if lang and lang.strip() in SUPPORTED_LANGS else "pt-BR"
+    entry = await service.enrich_history_entry(clean_vendor, version.strip(), lang=clean_lang)
     if not entry:
         raise HTTPException(status_code=404, detail="History version not found")
     return entry

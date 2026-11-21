@@ -1,19 +1,79 @@
-<!DOCTYPE html>
-<html lang="pt-br">
+<!doctype html>
+<html lang="pt-BR" data-title-key="terms.pageTitle">
 <head>
-    <meta charset="UTF-8"><title>DriveRadar // Termos de Uso</title>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap" rel="stylesheet">
-    <style>
-        body { background:#000; color:#a0a0a3; font-family:'JetBrains Mono',monospace; padding:40px; line-height:1.6; }
-        h1 { color:#fff; border-bottom:1px solid #262626; padding-bottom:10px; }
-        a { color:#00ff41; }
-    </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DriveRadar — Termos de Uso</title>
+  <link rel="icon" href="/driveradar/static/favicon-16.png" type="image/png">
+  <link rel="stylesheet" href="/driveradar/static/css/style.css?v=7.2.0">
 </head>
 <body>
-    <h1>TERMOS_DE_USO</h1>
-    <p>> O conteúdo exibido é meramente informativo, obtido via telemetria de comunidade e fontes oficiais.</p>
-    <p>> O DriveRadar não se responsabiliza por danos causados por instalações de drivers de terceiros.</p>
-    <p>> O uso desta ferramenta implica na aceitação destes termos técnicos.</p>
-    <br><a href="/driveradar/">[ VOLTAR_AO_TERMINAL ]</a>
+  <header class="site-header">
+    <a class="brand" href="/driveradar/" aria-label="DriveRadar">
+      <span class="brand-mark" aria-hidden="true">DR</span>
+      <span><strong>DriveRadar</strong><small data-i18n="brand.sub">verificação cruzada</small></span>
+    </a>
+    <div class="header-actions">
+      <a class="download-app-button" href="/driveradar/updates/DriveRadar-Setup.exe" data-i18n="header.appWindows" data-i18n-title="header.appWindowsTitle" title="Baixar aplicativo Windows com notificações nativas e atualização automática">App Windows</a>
+      <select class="lang-select" id="lang-select" aria-label="Language / Idioma">
+        <option value="pt-BR">PT</option>
+        <option value="en">EN</option>
+        <option value="es">ES</option>
+        <option value="fr">FR</option>
+      </select>
+      <select class="theme-select" id="theme-select" aria-label="Theme / Tema" data-i18n-title="header.themeTitle" title="Escolher tema">
+        <option value="system" data-i18n="theme.system">Tema: Sistema</option>
+        <option value="dark" data-i18n="theme.dark">Grafite</option>
+        <option value="light" data-i18n="theme.light">Claro</option>
+        <option value="midnight" data-i18n="theme.midnight">Midnight OLED</option>
+        <option value="nord" data-i18n="theme.nord">Nordic</option>
+        <option value="forest" data-i18n="theme.forest">Emerald</option>
+        <option value="sand" data-i18n="theme.sand">Sand</option>
+      </select>
+    </div>
+  </header>
+
+  <main class="legal-main">
+    <article class="legal-card">
+      <p class="eyebrow" data-i18n="terms.eyebrow">DOCUMENTO LEGAL</p>
+      <h1 data-i18n="terms.title">Termos de Uso</h1>
+      <p class="legal-lead" data-i18n="terms.lead">Condições técnicas e limitações de responsabilidade aplicáveis ao uso do painel web e do aplicativo DriveRadar.</p>
+
+      <section class="legal-section">
+        <h2 data-i18n="terms.h1">1. Natureza informativa</h2>
+        <p data-i18n="terms.p1">As versões, pontuações do Crossover, classificações de risco e resumos gerados por IA têm caráter exclusivamente informativo, baseados em dados públicos coletados no momento da auditoria.</p>
+      </section>
+
+      <section class="legal-section">
+        <h2 data-i18n="terms.h2">2. Decisão e responsabilidade</h2>
+        <p data-i18n="terms.p2">O score de confiança mede concordância entre fontes sobre versão e data, não garantindo compatibilidade ou estabilidade em configurações específicas. A decisão final de instalar ou adiar qualquer driver ou atualização de sistema é sempre do usuário.</p>
+      </section>
+
+      <section class="legal-section">
+        <h2 data-i18n="terms.h3">3. Software de terceiros</h2>
+        <p data-i18n="terms.p3">O DriveRadar não hospeda instaladores de terceiros (NVIDIA, AMD, Intel ou Microsoft) e não se responsabiliza por falhas, incompatibilidades ou perdas decorrentes da instalação desses pacotes externos.</p>
+      </section>
+
+      <section class="legal-section">
+        <h2 data-i18n="terms.h4">4. Disponibilidade e atualizações</h2>
+        <p data-i18n="terms.p4">O serviço e o aplicativo desktop são fornecidos no estado em que se encontram, podendo receber atualizações automáticas de segurança, correções e melhorias sem aviso prévio.</p>
+      </section>
+
+      <div class="legal-actions">
+        <a class="legal-back" href="/driveradar/" data-i18n="terms.back">← Voltar para o painel</a>
+      </div>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <p data-i18n="footer.copy">DriveRadar por OptLabs. Dados cruzados por regras verificáveis; decisão final sempre do usuário.</p>
+    <nav aria-label="Links legais">
+      <a href="/driveradar/privacidade" data-i18n="footer.privacy">Privacidade</a>
+      <a href="/driveradar/termos" data-i18n="footer.terms">Termos</a>
+    </nav>
+  </footer>
+
+  <script src="/driveradar/static/js/i18n.js?v=2.0.0" defer></script>
+  <script src="/driveradar/static/js/legal.js?v=1.0.0" defer></script>
 </body>
 </html>

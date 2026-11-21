@@ -1,57 +1,69 @@
 # DriveRadar
 
-Painel de verificação cruzada de versões de drivers NVIDIA, AMD e Intel e atualizações Windows.
+Cross-verified release tracker for **NVIDIA GeForce**, **AMD Radeon**, **Intel Arc**, and **Windows 11** updates with deterministic risk scoring, AI technical interpretation, Web dashboard, and Windows Desktop notifications.
 
-## Princípios de dados
+## Data Verification & Crossover Score
 
-- A versão candidata é descoberta em fonte primária oficial ou fonte técnica estruturada e confirmada em artefato ou página do fabricante.
-- Publishers são deduplicados: duas URLs da mesma organização contam uma vez.
-- Corroborações de versão exigem correspondência exata com limites de versão e contexto do fabricante, preservando o link direto da matéria ou nota oficial.
-- Conflitos externos detectam versões mais recentes reportadas por publicações confiáveis (ex.: hotfixes recentes ainda não promovidos a WHQL).
-- Comunidades não participam do score de confiança.
-- Ausência de relatos nunca é convertida em “estável”. Sem telemetria verificável, a estabilidade é `Indeterminado`.
-- Falhas de coleta ficam expostas como `stale` ou `unavailable`; o último valor válido é preservado.
+- **Primary source verification**: Candidate versions are discovered on official vendor feeds or APIs and cross-checked against independent technical publishers.
+- **Publisher deduplication**: Multiple URLs belonging to the same organization count once.
+- **Boundary-safe matching**: Corroboration requires strict version boundaries and vendor context, preserving exact source URLs.
+- **External conflict detection**: Flags trustworthy reports of newer hotfixes or uncatalogued releases not yet promoted in official catalogs.
+- **Honest availability**: Community telemetry is never fabricated; collection failures expose `stale` or `unavailable` states while preserving the last verified record.
 
-## Score de confiança
+### Deterministic Confidence Formula (0–98)
 
-- 72 pontos: confirmação por fabricante ou autoridade.
-- +8 pontos por publisher independente concordante, limitado a 24.
-- -20 pontos por valor conflitante.
-- -20 pontos quando apenas o último valor persistido está disponível.
-- Limite de 98 para evitar certeza absoluta.
+- **+72 pts**: Official vendor or authority confirmation
+- **+8 pts** per agreeing independent publisher (up to **+24 pts**)
+- **-20 pts** per conflicting version report (up to `-50`)
+- **-20 pts** if only persisted `stale` data is available
+- Capped at **98** (confidence scores confirm version and release date accuracy — never hardware-specific stability)
 
-O score confirma versão e data. Não prevê estabilidade numa configuração específica de hardware.
+## Precision 4-Tier Risk Evaluation Engine
 
-## Histórico e alertas
+Each verified release runs through both AI evidence synthesis and deterministic policy guardrails (`advisor.py`) so critical defects are never masked as neutral advice:
 
-- Até 24 versões primariamente verificadas são preservadas por fabricante.
-- Cada item do histórico expõe versão, canal/build, lançamento, data de verificação, snapshot do Crossover, notas oficiais estruturadas (destaques, correções e problemas conhecidos), resumo técnico da IA e links rastreáveis.
-- Itens sem resumo técnico são enriquecidos automaticamente em segundo plano e sob demanda ao abrir os detalhes.
-- O botão **Configurar alertas** solicita permissão do navegador e avisa sobre novos alertas relevantes encontrados nas atualizações periódicas enquanto o site estiver aberto.
-- O service worker já aceita eventos Web Push para futura integração com um provedor de push.
+| Risk Level | Score | Enforced Recommendation | Triggers |
+| :--- | :--- | :--- | :--- |
+| **Critical** | `80–100` | **`do_not_install`** (Red alert badge) | Hardware damage (e.g., excessive SSD writes / overheating / bricking), filesystem or data corruption, boot loops / widespread BSOD, official vendor recall, or active unmitigated critical flaw |
+| **High** | `55–79` | `wait` | Widespread functional regressions or newer official hotfix pending |
+| **Moderate** | `25–54` | `wait` / `install` | Localized known issues (1–2 specific games/apps) or optional/Preview builds without critical risk |
+| **Low** | `0–24` | `install` | Clean WHQL/GA release, including security patches that **fix** CVEs without introducing regressions (anti-false-positive rule) |
 
-## Crossover e pool de IAs
+## AI Provider Pool & Failover
 
-O crossover é determinístico: confirma versão e data pela fonte primária, concordância entre publishers, conflitos e idade do dado. Ele permanece disponível mesmo se todas as IAs falharem.
+Textual assessments and historical release summaries use a JSON-validated failover pool grounded strictly in collected evidence IDs:
 
-Insights textuais e resumos técnicos do histórico usam um pool com failover:
+1. **Google Gemini API** (`GEMINI_API_KEY_FILE`, default `/run/secrets/gemini_api_key`)
+2. **OpenCode Zen** free models (optional fallback)
+3. **NVIDIA NIM** (optional fallback)
+4. Last valid persisted analysis if all upstream providers are temporarily unavailable
 
-1. Google Gemini API (`GEMINI_API_KEY_FILE`, padrão `/run/secrets/gemini_api_key`);
-2. modelos gratuitos disponíveis no OpenCode Zen (fallback opcional);
-3. NVIDIA NIM (fallback opcional);
-4. última análise validada persistida quando todos os providers estão temporariamente indisponíveis.
+## Multilingual & Theme Support
 
-Respostas são aceitas somente em JSON, precisam cobrir os quatro itens e repetir exatamente as versões coletadas. Citações só podem apontar para IDs existentes no registro de evidências do backend.
+- **4 Languages (`pt-BR`, `en`, `es`, `fr`)**: Complete translation across the Web dashboard, Desktop app, Windows notifications, system tray menus, Privacy & Terms pages, Crossover score breakdown, and AI assessments + on-demand historical summaries.
+- **6 Curated Themes + OS Sync**: `System`, `Graphite (Dark)`, `Light`, `Midnight OLED`, `Nordic`, `Emerald`, and `Sand`.
 
-## Publicidade
+## History & Browser Alerts
 
-Google AdSense Auto Ads está configurado para `ca-pub-7513394193260475`. O gateway publica o registro obrigatório em `/ads.txt`; CSP permite apenas os endpoints Google necessários e recursos do próprio site.
+- Preserves up to **24 primarily verified versions** per vendor in a scrollable list (`overflow-y: scroll`).
+- Each version exposes channel/OS build, release date, Crossover breakdown, structured release notes, risk classification, and 4-language AI summaries (enriched automatically in the background and on demand).
+- Browser **Alert settings** request notification permission for new releases and relevant security alerts.
 
-## Fontes
+## Windows Desktop App (`desktop/`)
 
-O registro em `sources.py` contém mais de 55 fontes de fabricantes, autoridades, equipes de pesquisa e publicações técnicas. Cada auditoria publica quantas estavam acessíveis e o estado individual de cada uma.
+Minimalist Electron client for Windows 10/11 located in `desktop/`:
 
-## Execução
+- **System Tray Background Mode**: Minimize or close to the tray (`--hidden`), optional Windows sign-in autostart, and visual unread alert indicator.
+- **Native Windows Notifications**: Per-vendor toggles, Beta/Preview filter, external hotfix conflict alerts, security severity threshold, quiet hours, and **automatic app update notifications** (`available` and `downloaded` ready-to-install prompts).
+- **Auto-Updates**: Powered by `electron-updater` using the `generic` HTTPS provider pointing to `https://optlabs.com.br/driveradar/updates/` (serving `./releases:/app/releases:ro`).
+- **CI Releases**: [.github/workflows/release-desktop.yml](.github/workflows/release-desktop.yml) compiles `DriveRadar-Setup-*.exe` (NSIS installer), `.blockmap`, `latest.yml`, and `DriveRadar-Portable-*.exe` on `windows-latest` whenever a `v*` tag is pushed.
+
+## Sources & Advertising
+
+- `sources.py` monitors **55+ independent security authorities, research teams, vendor feeds, and hardware publications**.
+- Google AdSense Auto Ads (`ca-pub-7513394193260475`) and `/ads.txt` are served under a strict Content Security Policy with zero `innerHTML` usage.
+
+## Running with Docker
 
 ```bash
 docker compose up -d --build
@@ -59,31 +71,22 @@ docker compose ps
 curl -fsS http://127.0.0.1:8512/driveradar/health
 ```
 
-Variáveis opcionais:
+Optional environment variables:
 
-- `CACHE_TTL_SECONDS`: intervalo de coleta; padrão 3600.
-- `API_SECRET_KEY`: habilita `/api/data` no serviço interno da porta 8513. Sem valor, o endpoint retorna 503.
-- `API_ALLOWED_ORIGINS`: origens CORS da API interna.
-- `APP_UID` e `APP_GID`: IDs usados pelo usuário não privilegiado do container.
-- `GEMINI_API_KEY_FILE`: secret do Google Gemini; padrão `/run/secrets/gemini_api_key`.
-- `GEMINI_MODELS`: ordem dos modelos Gemini separados por vírgulas.
-- `OPENCODE_ZEN_MODELS`: ordem do pool gratuito Zen, separada por vírgulas.
-- `OPENCODE_ZEN_API_KEY_FILE`: secret opcional do Zen; padrão `/run/secrets/opencode_zen_api_key`.
-- `NVIDIA_API_KEY_FILE`: secret opcional do fallback NIM; padrão `/run/secrets/nvidia_api_key`.
+- `CACHE_TTL_SECONDS`: Collection interval in seconds (default `3600`).
+- `API_SECRET_KEY`: Enables internal API endpoints on port `8513` (returns `503` if unset).
+- `API_ALLOWED_ORIGINS`: Allowed CORS origins for the internal API.
+- `APP_UID` / `APP_GID`: Non-privileged container user IDs.
+- `GEMINI_API_KEY_FILE`: Path to Gemini secret file (default `/run/secrets/gemini_api_key`).
+- `GEMINI_MODELS`: Comma-separated ordered list of Gemini model IDs.
+- `OPENCODE_ZEN_MODELS` / `OPENCODE_ZEN_API_KEY_FILE`: Optional OpenCode Zen fallback settings.
+- `NVIDIA_API_KEY_FILE`: Optional NVIDIA NIM fallback secret path.
 
-## Aplicativo Desktop para Windows
-
-O diretório `desktop/` contém o aplicativo Electron minimalista para Windows 10/11:
-
-- **Bandeja do sistema (System Tray)**: fechamento ou minimização discreta para a bandeja, com indicador visual de novos alertas e início automático opcional com o Windows (`--hidden`).
-- **Notificações nativas do Windows**: avisos para novas versões de drivers/Windows, conflitos de hotfix e alertas de segurança filtrados por fabricante, severidade e horário silencioso.
-- **Atualizações automáticas**: alimentadas via `electron-updater` apontando para `https://optlabs.com.br/driveradar/updates/` (artefatos montados em `./releases:/app/releases:ro`).
-- **Build e Release**: a workflow [.github/workflows/release-desktop.yml](.github/workflows/release-desktop.yml) compila `DriveRadar-Setup-*.exe`, `.blockmap`, `latest.yml` e `DriveRadar-Portable-*.exe` em `windows-latest` ao publicar uma tag `v*`.
-
-## Testes
+## Testing
 
 ```bash
-python -m unittest discover -s tests -v
-node --check static/js/app.js
+.venv/bin/python -m unittest discover -s tests -v
+node --check static/js/i18n.js && node --check static/js/app.js && node --check static/js/legal.js
+(cd desktop && npm run check)
 docker compose config -q
 ```

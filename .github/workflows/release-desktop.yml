@@ -47,11 +47,12 @@ jobs:
         with:
           name: DriveRadar ${{ github.ref_name }} (Windows)
           body: |
-            ## DriveRadar Desktop para Windows (${{ github.ref_name }})
+            ## DriveRadar Desktop for Windows (${{ github.ref_name }})
 
-            - **Instalador (`DriveRadar-Setup-*.exe`)**: instalação por usuário com atalhos e **atualizações automáticas** via `https://optlabs.com.br/driveradar/updates/`.
-            - **Portátil (`DriveRadar-Portable-*.exe`)**: executável único sem instalação.
-            - **Bandeja do sistema + Notificações nativas**: minimize para o ícone da bandeja e receba alertas nativos do Windows quando surgir novo driver NVIDIA, AMD, Intel, atualização do Windows 11, hotfix ou alerta de segurança.
+            - **Installer (`DriveRadar-Setup-*.exe`)**: Per-user Windows installer with shortcuts and **automatic background updates** via `https://optlabs.com.br/driveradar/updates/`.
+            - **Portable (`DriveRadar-Portable-*.exe`)**: Standalone single-file executable requiring no installation.
+            - **System Tray & Native Windows Notifications**: Minimize to the system tray and receive native Windows alerts for new NVIDIA, AMD, Intel, and Windows 11 releases, critical risk warnings, hotfix conflicts, security alerts, and DriveRadar app updates.
+            - **Multilingual & Themes**: Full support for English, Portuguese (BR), Spanish, and French (including translated AI summaries) plus 6 curated visual themes and OS theme sync.
           files: |
             desktop/dist/latest.yml
             desktop/dist/*.exe

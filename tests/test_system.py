@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from advisor import AIAdvisorPool, GEMINI_API_BASE, NIM_MODEL
+from advisor import AIAdvisorPool, GEMINI_API_BASE, NIM_MODEL, evaluate_risk_policy
 from monitor import USER_AGENT, UpdateMonitor, parse_release_notes_sections
 from service import HISTORY_LIMIT, DriveRadarService, StateStore, build_verification, migrate_state
 from sources import SOURCES, Source, SourceHub, _version_in_text
@@ -312,19 +312,38 @@ class AdvisorPoolTests(unittest.TestCase):
             }
             calls = []
 
-            def fake_call(_, __, model, ___):
-                calls.append(model)
-                if model == "free-test":
-                    raise ValueError("temporary failure")
-                return {"insights": {vendor: {
-                    "headline": "Leitura validada", "summary": "Resumo baseado nas fontes.",
-                    "summary_evidence_ids": [f"{vendor}-technical-1"],
-                    "recommendation": {"action": "install", "confidence": "alta", "target_audience": "Todos", "reason": "Correção oficial disponível.", "evidence_ids": [f"{vendor}-technical-1"]},
-                    "highlights": [{"text": "Novo recurso", "evidence_ids": [f"{vendor}-technical-1"]}],
-                    "positive_signals": [{"text": "Correção documentada", "evidence_ids": [f"{vendor}-technical-1"]}],
-                    "risk_signals": [{"text": "Sem fonte", "evidence_ids": ["unknown"]}],
-                    "watch_items": [],
-                } for vendor in ("nvidia", "amd", "intel", "windows")}}
+            def fake_call(_, __, model, prompt):
+                if "EVIDENCIAS_NAO_CONFIAVEIS" in prompt:
+                    calls.append(model)
+                    if model == "free-test":
+                        raise ValueError("temporary failure")
+                    return {"insights": {vendor: {
+                        "headline": "Leitura validada", "summary": "Resumo baseado nas fontes.",
+                        "summary_evidence_ids": [f"{vendor}-technical-1"],
+                        "risk_assessment": {"level": "low", "score": 15, "categories": [], "critical_reasons": []},
+                        "recommendation": {"action": "install", "confidence": "alta", "target_audience": "Todos", "reason": "Correção oficial disponível.", "evidence_ids": [f"{vendor}-technical-1"]},
+                        "highlights": [{"text": "Novo recurso", "evidence_ids": [f"{vendor}-technical-1"]}],
+                        "positive_signals": [{"text": "Correção documentada", "evidence_ids": [f"{vendor}-technical-1"]}],
+                        "risk_signals": [{"text": "Sem fonte", "evidence_ids": ["unknown"]}],
+                        "watch_items": [],
+                    } for vendor in ("nvidia", "amd", "intel", "windows")}}
+                return {"translations": {
+                    lang: {
+                        vendor: {
+                            "headline": f"[{lang}] Headline {vendor}",
+                            "summary": f"[{lang}] Summary {vendor}.",
+                            "target_audience": f"[{lang}] All",
+                            "reason": f"[{lang}] Official fix.",
+                            "critical_reasons": [],
+                            "highlights": [f"[{lang}] New feature"],
+                            "positive_signals": [f"[{lang}] Documented fix"],
+                            "risk_signals": [],
+                            "watch_items": [],
+                        }
+                        for vendor in ("nvidia", "amd", "intel", "windows")
+                    }
+                    for lang in ("en", "es", "fr")
+                }}
 
             pool._call = fake_call
             technical = {vendor: [{
@@ -343,6 +362,8 @@ class AdvisorPoolTests(unittest.TestCase):
             self.assertEqual(public["assessments"]["nvidia"]["positive_signals"][0]["citations"][0]["publisher"], "Official nvidia")
             self.assertEqual(public["assessments"]["nvidia"]["recommendation"]["action"], "install")
             self.assertEqual(public["assessments"]["nvidia"]["risk_signals"], [])
+            self.assertEqual(public["assessments"]["nvidia"]["risk_assessment"]["level"], "low")
+            self.assertEqual(set(public["assessments"]["nvidia"]["translations"]), {"en", "es", "fr"})
 
     def test_gemini_is_primary_provider_when_configured(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -359,14 +380,30 @@ class AdvisorPoolTests(unittest.TestCase):
             }
             seen_endpoints = []
 
-            def fake_call(endpoint, key, model, _prompt):
-                seen_endpoints.append((endpoint, key, model))
-                return {"insights": {vendor: {
-                    "headline": "Leitura Gemini", "summary": "Resumo Gemini.",
-                    "summary_evidence_ids": [f"{vendor}-technical-1"],
-                    "recommendation": {"action": "install", "reason": "Estável conforme notas.", "evidence_ids": [f"{vendor}-technical-1"]},
-                    "highlights": [], "positive_signals": [], "risk_signals": [], "watch_items": [],
-                } for vendor in ("nvidia", "amd", "intel", "windows")}}
+            def fake_call(endpoint, key, model, prompt):
+                if "EVIDENCIAS_NAO_CONFIAVEIS" in prompt:
+                    seen_endpoints.append((endpoint, key, model))
+                    return {"insights": {vendor: {
+                        "headline": "Leitura Gemini", "summary": "Resumo Gemini.",
+                        "summary_evidence_ids": [f"{vendor}-technical-1"],
+                        "risk_assessment": {"level": "low", "score": 12, "categories": [], "critical_reasons": []},
+                        "recommendation": {"action": "install", "reason": "Estável conforme notas.", "evidence_ids": [f"{vendor}-technical-1"]},
+                        "highlights": [], "positive_signals": [], "risk_signals": [], "watch_items": [],
+                    } for vendor in ("nvidia", "amd", "intel", "windows")}}
+                return {"translations": {
+                    lang: {
+                        vendor: {
+                            "headline": f"[{lang}] Gemini",
+                            "summary": f"[{lang}] Gemini summary.",
+                            "target_audience": f"[{lang}] All",
+                            "reason": f"[{lang}] Stable per notes.",
+                            "critical_reasons": [],
+                            "highlights": [], "positive_signals": [], "risk_signals": [], "watch_items": [],
+                        }
+                        for vendor in ("nvidia", "amd", "intel", "windows")
+                    }
+                    for lang in ("en", "es", "fr")
+                }}
 
             pool._call = fake_call
             technical = {vendor: [{
@@ -376,6 +413,107 @@ class AdvisorPoolTests(unittest.TestCase):
             state = pool.analyze(drivers, [], technical)
             self.assertEqual(state["provider"], "Google Gemini")
             self.assertEqual(seen_endpoints[0], (GEMINI_API_BASE, "gem-test-key", "gemini-3.5-flash-lite"))
+
+    def test_risk_policy_escalates_critical_defects_and_forbids_wait(self):
+        ssd_wear = evaluate_risk_policy(
+            {
+                "risk_assessment": {"level": "moderate", "score": 45, "categories": ["regression"], "critical_reasons": []},
+                "recommendation": {"action": "wait", "reason": "Relatos de desgaste excessivo do SSD devido a gravações contínuas."},
+                "risk_signals": [{"text": "O Display Container pode realizar gravações excessivas (3GB a 30GB por hora) no SSD em alguns PCs."}],
+            },
+            cited_records=[{"tier": "alert", "kind": "technical", "title": "Nvidia driver bug could be silently killing your SSD"}],
+        )
+        self.assertEqual(ssd_wear["risk_assessment"]["level"], "critical")
+        self.assertGreaterEqual(ssd_wear["risk_assessment"]["score"], 85)
+        self.assertEqual(ssd_wear["action"], "do_not_install")
+        self.assertIn("hardware_damage", ssd_wear["risk_assessment"]["categories"])
+        self.assertTrue(ssd_wear["risk_assessment"]["critical_reasons"])
+
+        for sample_text, expected_cat in (
+            ("Critical bug causes NTFS corruption and data loss on Windows 11", "data_loss"),
+            ("Users hit boot loop and widespread BSOD after installing update", "system_crash"),
+            ("Update recalled and pulled by Microsoft after failures", "recalled"),
+        ):
+            res = evaluate_risk_policy({
+                "recommendation": {"action": "wait", "reason": "Wait for fix."},
+                "risk_signals": [{"text": sample_text}],
+            })
+            self.assertEqual(res["risk_assessment"]["level"], "critical")
+            self.assertEqual(res["action"], "do_not_install")
+            self.assertIn(expected_cat, res["risk_assessment"]["categories"])
+
+    def test_risk_policy_anti_false_positive_for_security_fixes_and_minor_issues(self):
+        fixed_sec = evaluate_risk_policy(
+            {
+                "risk_assessment": {"level": "low", "score": 15, "categories": [], "critical_reasons": []},
+                "recommendation": {"action": "install", "reason": "Correção oficial para vulnerabilidade CVE-2026-9999 sem regressões graves."},
+                "positive_signals": [{"text": "Fixes critical zero-day privilege escalation CVE-2026-9999."}],
+                "risk_signals": [{"text": "Minor stutter in one legacy game when V-Sync is toggled."}],
+            },
+            cited_records=[{"tier": "alert", "kind": "security", "title": "Patch fixes zero-day BitLocker bypass CVE-2026-9999"}],
+        )
+        self.assertEqual(fixed_sec["risk_assessment"]["level"], "low")
+        self.assertEqual(fixed_sec["action"], "install")
+        self.assertEqual(fixed_sec["risk_assessment"]["critical_reasons"], [])
+
+        minor_wait = evaluate_risk_policy({
+            "risk_assessment": {"level": "moderate", "score": 38, "categories": ["regression"], "critical_reasons": []},
+            "recommendation": {"action": "wait", "reason": "Intermittent timeout in Cyberpunk 2077 on RX 9000."},
+            "risk_signals": [{"text": "Intermittent driver timeout in Cyberpunk 2077 with ray tracing enabled."}],
+        })
+        self.assertEqual(minor_wait["risk_assessment"]["level"], "moderate")
+        self.assertEqual(minor_wait["action"], "wait")
+
+    def test_enrich_history_entry_translates_existing_ptbr_summary_on_demand(self):
+        import asyncio
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "bot_state.json"
+            store = StateStore(state_path)
+            store.update({
+                "nvidia": {
+                    "version": "621.24", "release_date": "2026-11-12", "verified": True, "primary_verified": True,
+                    "source_name": "NVIDIA", "source_url": "https://nvidia.com/621.24", "official_url": "https://nvidia.com/621.24",
+                },
+                **{v: {"verified": False} for v in ("amd", "intel", "windows")},
+            }, collected_at=1000)
+            store.save_history_summary("nvidia", "621.24", {
+                "headline": "Problema grave de desgaste no SSD",
+                "summary": "Gravações contínuas no SSD justificam não instalar.",
+                "recommendation_action": "wait",
+                "recommendation_reason": "Risco de desgaste excessivo do SSD.",
+                "highlights": ["Suporte DLSS"],
+                "fixed_issues": [],
+                "known_issues": ["Gravações excessivas (3GB a 30GB/h) no SSD"],
+                "watch_items": [],
+                "citations": [],
+                "enriched_at": 1000,
+            })
+
+            service = DriveRadarService(state_path=state_path)
+            service.advisor.gemini_key = "gem-test-key"
+
+            def fake_call(_, __, ___, ____):
+                return {"translations": {
+                    lang: {
+                        "headline": f"[{lang}] Severe SSD wear bug",
+                        "summary": f"[{lang}] Continuous SSD writes justify avoiding this release.",
+                        "recommendation_reason": f"[{lang}] Excessive SSD wear risk.",
+                        "critical_reasons": [f"[{lang}] Excessive SSD writes (3GB to 30GB/h)"],
+                        "highlights": [f"[{lang}] DLSS support"],
+                        "fixed_issues": [],
+                        "known_issues": [f"[{lang}] Excessive SSD writes (3GB to 30GB/h)"],
+                        "watch_items": [],
+                    }
+                    for lang in ("en", "es", "fr")
+                }}
+
+            service.advisor._call = fake_call
+            entry = asyncio.run(service.enrich_history_entry("nvidia", "621.24", lang="en"))
+            rs = entry["release_summary"]
+            self.assertEqual(rs["risk_level"], "critical")
+            self.assertEqual(rs["recommendation_action"], "do_not_install")
+            self.assertEqual(set(rs["translations"]), {"en", "es", "fr"})
+            self.assertEqual(rs["translations"]["en"]["headline"], "[en] Severe SSD wear bug")
 
 
 class RegistryAndFrontendTests(unittest.TestCase):
@@ -416,6 +554,37 @@ class RegistryAndFrontendTests(unittest.TestCase):
             self.assertIn(code, desktop_i18n)
         self.assertNotIn("innerHTML", web_i18n)
         self.assertNotIn("innerHTML", desktop_i18n)
+        desktop_renderer = (root / "desktop/src/renderer/renderer.js").read_text()
+        desktop_css = (root / "desktop/src/renderer/styles.css").read_text()
+        desktop_main = (root / "desktop/src/main.js").read_text()
+        self.assertNotIn("innerHTML", desktop_renderer)
+        self.assertIn("theme-select", page)
+        for theme_name in ("midnight", "nord", "forest", "sand"):
+            self.assertIn(theme_name, css)
+            self.assertIn(theme_name, desktop_css)
+            self.assertIn(theme_name, desktop_main)
+        for marker in ("risk-critical", "critical-badge", "localizeAssessment", "localizeSummary"):
+            self.assertIn(marker, script + css)
+            self.assertIn(marker, desktop_renderer + desktop_css)
+
+        legal_js = (root / "static/js/legal.js").read_text()
+        self.assertNotIn("innerHTML", legal_js)
+        for legal_name in ("privacidade.html", "termos.html"):
+            legal_html = (root / "static" / legal_name).read_text()
+            self.assertIn("i18n.js", legal_html)
+            self.assertIn("legal.js", legal_html)
+            self.assertIn("lang-select", legal_html)
+            self.assertIn("theme-select", legal_html)
+            self.assertIn("data-i18n", legal_html)
+            self.assertNotIn("fonts.googleapis.com", legal_html)
+            self.assertNotIn("innerHTML", legal_html)
+
+        readme = (root / "README.md").read_text()
+        workflow = (root / ".github/workflows/release-desktop.yml").read_text()
+        self.assertIn("Cross-verified", readme)
+        self.assertIn("Risk Evaluation", readme)
+        self.assertIn("DriveRadar Desktop for Windows", workflow)
+        self.assertNotIn("para Windows", workflow)
 
     def test_updates_endpoint_validation_and_latest_manifest_resolution(self):
         import asyncio

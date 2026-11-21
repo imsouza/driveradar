@@ -49,6 +49,91 @@ function scoreTone(score) {
   return 'low';
 }
 
+function localizeConfidence(label, score) {
+  const low = String(label || '').toLowerCase();
+  if (low === 'confirmada' || low === 'confirmed' || score >= 88) return tr('conf.confirmed');
+  if (low === 'alta' || low === 'high' || score >= 72) return tr('conf.high');
+  if (low === 'moderada' || low === 'moderate' || low === 'medium' || score >= 50) return tr('conf.medium');
+  return tr('conf.low');
+}
+
+function localizeChannel(channel) {
+  const raw = String(channel || '').trim();
+  if (!raw) return '';
+  const low = raw.toLowerCase();
+  if (low.includes('preview opcional')) return tr('channel.previewD');
+  if (low.includes('segurança (b)') || low.includes('seguranca (b)')) return tr('channel.securityB');
+  if (low.includes('emergencial') || low.includes('out-of-band')) return tr('channel.outOfBand');
+  return raw;
+}
+
+function resolveRisk(obj) {
+  if (!obj || typeof obj !== 'object') {
+    return { level: 'moderate', score: 38, critical_reasons: [], action: 'wait' };
+  }
+  const ra = obj.risk_assessment && typeof obj.risk_assessment === 'object' ? obj.risk_assessment : null;
+  const rawAction = obj.recommendation?.action || obj.recommendation_action || 'wait';
+  const rawLevel = String(ra?.level || obj.risk_level || '').toLowerCase();
+  let score = ra?.score !== undefined && ra?.score !== null
+    ? Number(ra.score)
+    : obj.risk_score !== undefined && obj.risk_score !== null
+      ? Number(obj.risk_score)
+      : (rawLevel === 'critical' || rawAction === 'do_not_install' ? 90 : rawLevel === 'high' ? 65 : rawAction === 'install' ? 15 : 38);
+  const criticalReasons = Array.isArray(ra?.critical_reasons) ? ra.critical_reasons : (Array.isArray(obj.critical_reasons) ? obj.critical_reasons : []);
+  const isCritical = rawLevel === 'critical' || rawAction === 'do_not_install' || score >= 80;
+  const level = isCritical ? 'critical' : ['high', 'moderate', 'low'].includes(rawLevel) ? rawLevel : (score >= 55 ? 'high' : score >= 25 ? 'moderate' : 'low');
+  const action = isCritical ? 'do_not_install' : rawAction;
+  return {
+    level,
+    score: Number.isFinite(score) ? Math.max(0, Math.min(100, Math.round(score))) : (isCritical ? 90 : 38),
+    critical_reasons: criticalReasons,
+    action
+  };
+}
+
+function localizeAssessment(assessment, lang) {
+  if (!assessment || typeof assessment !== 'object') return assessment;
+  const tblock = lang && lang !== 'pt-BR' ? assessment.translations?.[lang] : null;
+  if (!tblock || typeof tblock !== 'object') return assessment;
+  return {
+    ...assessment,
+    headline: tblock.headline || assessment.headline,
+    summary: tblock.summary || assessment.summary,
+    recommendation: assessment.recommendation
+      ? {
+          ...assessment.recommendation,
+          target_audience: tblock.target_audience || assessment.recommendation.target_audience,
+          reason: tblock.reason || assessment.recommendation.reason
+        }
+      : undefined,
+    risk_assessment: assessment.risk_assessment
+      ? {
+          ...assessment.risk_assessment,
+          critical_reasons: Array.isArray(tblock.critical_reasons) && tblock.critical_reasons.length
+            ? tblock.critical_reasons
+            : assessment.risk_assessment.critical_reasons
+        }
+      : undefined
+  };
+}
+
+function localizeSummary(summary, lang) {
+  if (!summary || typeof summary !== 'object') return summary;
+  const tblock = lang && lang !== 'pt-BR' ? summary.translations?.[lang] : null;
+  if (!tblock || typeof tblock !== 'object') return summary;
+  return {
+    ...summary,
+    headline: tblock.headline || summary.headline,
+    summary: tblock.summary || summary.summary,
+    recommendation_reason: tblock.recommendation_reason || summary.recommendation_reason,
+    critical_reasons: Array.isArray(tblock.critical_reasons) && tblock.critical_reasons.length ? tblock.critical_reasons : summary.critical_reasons,
+    highlights: Array.isArray(tblock.highlights) && tblock.highlights.length ? tblock.highlights : summary.highlights,
+    fixed_issues: Array.isArray(tblock.fixed_issues) && tblock.fixed_issues.length ? tblock.fixed_issues : summary.fixed_issues,
+    known_issues: Array.isArray(tblock.known_issues) && tblock.known_issues.length ? tblock.known_issues : summary.known_issues,
+    watch_items: Array.isArray(tblock.watch_items) && tblock.watch_items.length ? tblock.watch_items : summary.watch_items
+  };
+}
+
 function applyStaticLabels() {
   document.documentElement.lang = activeLang();
   const navMap = { drivers: 'nav.drivers', history: 'nav.history', alerts: 'nav.alerts', settings: 'nav.settings' };
@@ -114,22 +199,26 @@ function renderDrivers(data) {
     do_not_install: tr('action.do_not_install')
   };
 
+  const lang = activeLang();
   listToRender.forEach((vendor) => {
     const item = drivers[vendor] || {};
     const ver = item.verification || {};
     const score = Number(ver.score || 0);
     const tone = scoreTone(score);
-    const card = node('article', 'card');
+    const assess = localizeAssessment(assessments[vendor], lang);
+    const riskInfo = resolveRisk(assess);
+    const isCritical = assess?.status === 'ready' && (riskInfo.level === 'critical' || riskInfo.action === 'do_not_install');
+    const card = node('article', `card${isCritical ? ' risk-critical' : ''}`);
 
     const head = node('div', 'card-head');
     head.append(node('h2', '', LABELS[vendor]));
-    head.append(node('span', `score-label ${tone}`, `${score}% · ${ver.label || tr('conf.low')}`));
+    head.append(node('span', `score-label ${tone}`, `${score}% · ${localizeConfidence(ver.label, score)}`));
     card.append(head);
 
     const verRow = node('div', 'ver-row');
     verRow.append(node('strong', '', item.version || tr('drivers.unavailable')));
     const metaParts = [formatDate(item.release_date)];
-    if (item.channel) metaParts.push(item.channel);
+    if (item.channel) metaParts.push(localizeChannel(item.channel));
     if (item.os_build) metaParts.push(`Build ${item.os_build}`);
     if (item.file_size) metaParts.push(item.file_size);
     verRow.append(node('small', '', metaParts.join(' · ')));
@@ -149,13 +238,26 @@ function renderDrivers(data) {
       card.append(cBox);
     }
 
-    const assess = assessments[vendor];
     const rec = assess?.recommendation;
-    const action = rec?.action || 'wait';
-    const vBox = node('div', `verdict-box ${action}`);
-    vBox.append(node('small', '', tr('drivers.rec')));
+    const action = isCritical ? 'do_not_install' : (rec?.action || 'wait');
+    const vBoxClass = isCritical ? 'verdict-box critical do_not_install' : `verdict-box ${action}${riskInfo.level === 'high' ? ' high' : ''}`;
+    const vBox = node('div', vBoxClass);
+    const vTop = node('div', 'verdict-top');
+    vTop.append(node('small', '', tr('drivers.rec')));
+    const vBadges = node('div', 'verdict-badges');
+    if (isCritical) vBadges.append(node('span', 'critical-badge', tr('action.criticalBadge')));
+    if (assess?.risk_assessment?.level) {
+      vBadges.append(node('span', `risk-pill risk-${riskInfo.level}`, tr('risk.scoreLabel', { level: tr(`risk.${riskInfo.level}`), score: riskInfo.score })));
+    }
+    vTop.append(vBadges);
+    vBox.append(vTop);
     vBox.append(node('strong', '', actionLabels[action] || tr('action.wait')));
     vBox.append(node('p', '', rec?.reason || assess?.headline || tr('drivers.waitingReview')));
+    if (isCritical && riskInfo.critical_reasons.length) {
+      const crUl = node('ul', 'critical-reasons-list');
+      riskInfo.critical_reasons.forEach((reason) => crUl.append(node('li', '', reason)));
+      vBox.append(crUl);
+    }
     card.append(vBox);
 
     if (assess?.summary || (ver.agreements || []).length) {
@@ -234,14 +336,15 @@ function renderHistory(data) {
 
   const grid = $('#history-grid');
   grid.replaceChildren();
+  const lang = activeLang();
   const q = historySearch.trim().toLowerCase();
   const vendors = activeHistoryVendor === 'all' ? Object.keys(LABELS) : [activeHistoryVendor];
   vendors.forEach((vendor) => {
     const card = node('article', 'history-card');
     const items = (history[vendor] || []).filter((item) => {
       if (!q) return true;
-      const rs = item.release_summary || {};
-      const hay = [item.version, item.channel, item.os_build, item.date, rs.headline, rs.summary, ...(rs.highlights || []), ...(rs.fixed_issues || []), ...(rs.known_issues || [])].filter(Boolean).join(' ').toLowerCase();
+      const rs = localizeSummary(item.release_summary, lang) || {};
+      const hay = [item.version, item.channel, localizeChannel(item.channel), item.os_build, item.date, rs.headline, rs.summary, ...(rs.highlights || []), ...(rs.fixed_issues || []), ...(rs.known_issues || [])].filter(Boolean).join(' ').toLowerCase();
       return hay.includes(q);
     });
     const head = node('div', 'history-card-head');
@@ -259,13 +362,21 @@ function renderHistory(data) {
       const left = node('div');
       left.append(node('strong', '', item.version));
       const metaParts = [formatDate(item.date)];
-      if (item.channel) metaParts.push(item.channel);
+      if (item.channel) metaParts.push(localizeChannel(item.channel));
       if (item.verification?.score !== undefined) metaParts.push(`${item.verification.score}%`);
       left.append(node('small', '', metaParts.join(' · ')));
-      if (item.release_summary?.headline) left.append(node('div', 'snippet', item.release_summary.headline));
+      const localSummary = localizeSummary(item.release_summary, lang);
+      if (localSummary?.headline) left.append(node('div', 'snippet', localSummary.headline));
+      const rightCol = node('div', 'history-row-meta');
       const isCur = item.version === curVer;
-      const right = node('span', isCur ? 'tag-current' : 'tag-detail', isCur ? tr('history.current') : tr('history.details'));
-      btn.append(left, right);
+      rightCol.append(node('span', isCur ? 'tag-current' : 'tag-detail', isCur ? tr('history.current') : tr('history.details')));
+      if (localSummary) {
+        const rsRisk = resolveRisk(localSummary);
+        if (rsRisk.level === 'critical' || rsRisk.action === 'do_not_install') {
+          rightCol.append(node('span', 'tag-critical', tr('action.criticalBadge')));
+        }
+      }
+      btn.append(left, rightCol);
       btn.addEventListener('click', () => openHistoryDialog(vendor, item, idx));
       li.append(btn);
       ol.append(li);
@@ -277,6 +388,7 @@ function renderHistory(data) {
 
 function populateDialog(vendor, item, isLoading) {
   const body = $('#dialog-body');
+  const lang = activeLang();
   $('#dialog-eyebrow').textContent = `${LABELS[vendor]} · ${tr('dialog.eyebrow')}`;
   $('#dialog-title').textContent = `${LABELS[vendor]} ${item.version || ''}`.trim();
   body.replaceChildren();
@@ -291,12 +403,28 @@ function populateDialog(vendor, item, isLoading) {
     do_not_install: tr('action.do_not_install')
   };
 
-  const rs = item.release_summary;
+  const rs = localizeSummary(item.release_summary, lang);
   if (rs) {
-    const vBox = node('div', `verdict-box ${rs.recommendation_action || 'wait'}`);
-    vBox.append(node('small', '', tr('drivers.rec')));
-    vBox.append(node('strong', '', actionLabels[rs.recommendation_action] || tr('action.wait')));
+    const riskInfo = resolveRisk(rs);
+    const isCritical = riskInfo.level === 'critical' || riskInfo.action === 'do_not_install';
+    const act = isCritical ? 'do_not_install' : (rs.recommendation_action || 'wait');
+    const vBox = node('div', isCritical ? 'verdict-box critical do_not_install' : `verdict-box ${act}${riskInfo.level === 'high' ? ' high' : ''}`);
+    const vTop = node('div', 'verdict-top');
+    vTop.append(node('small', '', tr('drivers.rec')));
+    const badges = node('div', 'verdict-badges');
+    if (isCritical) badges.append(node('span', 'critical-badge', tr('action.criticalBadge')));
+    if (rs.risk_level) {
+      badges.append(node('span', `risk-pill risk-${riskInfo.level}`, tr('risk.scoreLabel', { level: tr(`risk.${riskInfo.level}`), score: riskInfo.score })));
+    }
+    vTop.append(badges);
+    vBox.append(vTop);
+    vBox.append(node('strong', '', actionLabels[act] || tr('action.wait')));
     vBox.append(node('p', '', rs.recommendation_reason || ''));
+    if (isCritical && riskInfo.critical_reasons.length) {
+      const crUl = node('ul', 'critical-reasons-list');
+      riskInfo.critical_reasons.forEach((reason) => crUl.append(node('li', '', reason)));
+      vBox.append(crUl);
+    }
     body.append(vBox);
     if (rs.headline) body.append(node('strong', '', rs.headline));
     if (rs.summary) body.append(node('p', '', rs.summary));
@@ -323,7 +451,7 @@ function populateDialog(vendor, item, isLoading) {
   [
     [tr('dialog.version'), item.version || '—'],
     [tr('dialog.release'), formatDate(item.date)],
-    [tr('dialog.channel'), item.channel || '—'],
+    [tr('dialog.channel'), localizeChannel(item.channel) || '—'],
     [tr('dialog.build'), item.os_build || '—'],
     [tr('dialog.size'), item.file_size || '—'],
     [tr('dialog.verifiedAt'), formatDate(item.verified_at, true)]
@@ -352,12 +480,14 @@ function populateDialog(vendor, item, isLoading) {
 
 async function openHistoryDialog(vendor, item) {
   const dialog = $('#history-dialog');
-  const needsEnrich = !item.release_summary?.enriched_at;
+  const lang = activeLang();
+  const needsEnrich = !item.release_summary?.enriched_at
+    || (lang !== 'pt-BR' && !item.release_summary?.translations?.[lang]);
   populateDialog(vendor, item, needsEnrich);
   if (!dialog.open) dialog.showModal();
   if (!needsEnrich || !item.version) return;
   try {
-    const enriched = await window.driveRadar.getHistoryEntry(vendor, item.version);
+    const enriched = await window.driveRadar.getHistoryEntry(vendor, item.version, lang);
     if (currentData?.history?.[vendor]) {
       const idx = currentData.history[vendor].findIndex((h) => h.version === enriched.version);
       if (idx !== -1) currentData.history[vendor][idx] = enriched;
@@ -557,7 +687,15 @@ function renderSettings() {
     tr('settings.theme'),
     tr('settings.themeDesc'),
     currentSettings.theme,
-    [['system', tr('settings.themeSystem')], ['dark', tr('settings.themeDark')], ['light', tr('settings.themeLight')]],
+    [
+      ['system', tr('settings.themeSystem')],
+      ['dark', tr('settings.themeDark')],
+      ['light', tr('settings.themeLight')],
+      ['midnight', tr('settings.themeMidnight')],
+      ['nord', tr('settings.themeNord')],
+      ['forest', tr('settings.themeForest')],
+      ['sand', tr('settings.themeSand')]
+    ],
     (v) => updateSetting({ theme: v })
   ));
   gApp.append(makeToggleRow(tr('settings.autoCheck'), tr('settings.autoCheckDesc'), currentSettings.autoCheckUpdates, (v) => updateSetting({ autoCheckUpdates: v })));
@@ -569,10 +707,17 @@ function renderSettings() {
   const updMsg = node('small', '', currentAppInfo?.updater?.message || '');
   updMsg.id = 'settings-updater-msg';
   updInfo.append(updMsg);
+  const updActions = node('div', 'banner-actions');
   const checkBtn = node('button', 'btn-outline', tr('settings.checkBtn'));
   checkBtn.type = 'button';
   checkBtn.addEventListener('click', () => window.driveRadar.checkAppUpdates());
-  updBox.append(updInfo, checkBtn);
+  const installBtn = node('button', 'btn-accent', tr('banner.install'));
+  installBtn.type = 'button';
+  installBtn.id = 'settings-updater-install';
+  installBtn.hidden = currentAppInfo?.updater?.state !== 'downloaded';
+  installBtn.addEventListener('click', () => window.driveRadar.installAppUpdate());
+  updActions.append(installBtn, checkBtn);
+  updBox.append(updInfo, updActions);
   gApp.append(updBox);
 
   const adv = node('details');
@@ -598,7 +743,9 @@ function renderUpdaterBanner(status) {
   const dlBtn = $('#banner-download');
   const instBtn = $('#banner-install');
   const msgEl = $('#settings-updater-msg');
+  const settingsInstBtn = $('#settings-updater-install');
   if (msgEl && status?.message) msgEl.textContent = status.message;
+  if (settingsInstBtn) settingsInstBtn.hidden = status?.state !== 'downloaded';
 
   if (!status || !['available', 'downloading', 'downloaded'].includes(status.state)) {
     banner.hidden = true;

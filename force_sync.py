@@ -11,7 +11,7 @@ from service import DriveRadarService
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Force a full DriveRadar sync")
-    parser.add_argument("--enrich-history", type=int, default=8, help="Max historical releases to enrich")
+    parser.add_argument("--enrich-history", type=int, default=12, help="Max historical releases to enrich")
     args = parser.parse_args()
 
     if not os.getenv("GEMINI_API_KEY") and not Path(os.getenv("GEMINI_API_KEY_FILE", "/run/secrets/gemini_api_key")).exists():
@@ -25,6 +25,7 @@ async def main() -> None:
     enriched = await service.enrich_history_batch(limit=max(0, args.enrich_history))
     data = await service.get_data()
     advisor = data.get("advisor", {})
+    assessments = advisor.get("assessments", {})
     summary = {
         "status": data["status"],
         "last_updated": data["last_updated"],
@@ -37,7 +38,16 @@ async def main() -> None:
         },
         "advisor": {
             "status": advisor.get("status"),
-            "assessments": len(advisor.get("assessments", {})),
+            "assessments": len(assessments),
+            "vendors": {
+                vendor: {
+                    "risk_level": (item.get("risk_assessment") or {}).get("level"),
+                    "risk_score": (item.get("risk_assessment") or {}).get("score"),
+                    "action": (item.get("recommendation") or {}).get("action"),
+                    "translated_langs": sorted((item.get("translations") or {}).keys()),
+                }
+                for vendor, item in assessments.items()
+            },
         },
         "history_enriched": enriched,
     }
