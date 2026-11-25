@@ -303,9 +303,10 @@ function processNotifications(data) {
           : rec === 'install'
             ? msg('notif.recInstall')
             : msg('notif.recWait');
+        const body = `${item.channel ? `${item.channel} · ` : ''}${recText}${isCritical ? '' : ` ${msg('notif.recFreshTip')}`}`;
         fireNotification(
           msg('notif.newVerTitle', { vendor: VENDOR_LABELS[v], version: ver }),
-          `${item.channel ? `${item.channel} · ` : ''}${recText}`,
+          body,
           () => showWindow('drivers')
         );
       }

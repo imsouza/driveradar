@@ -568,9 +568,17 @@ class RegistryAndFrontendTests(unittest.TestCase):
             self.assertIn(marker, desktop_renderer + desktop_css)
 
         desktop_html = (root / "desktop/src/renderer/index.html").read_text()
+        desktop_main_src = (root / "desktop/src/main.js").read_text()
         self.assertIn("tab-about", desktop_html)
         self.assertIn("Confidence ≠ stability", desktop_i18n)
         self.assertIn("renderAbout", desktop_renderer)
+        for obs_marker in ("drivers-observation-tip", "fresh-callout"):
+            self.assertIn(obs_marker, page + script)
+            self.assertIn(obs_marker, desktop_html + desktop_renderer)
+        self.assertIn("drivers.waitTipBody", web_i18n)
+        self.assertIn("drivers.waitTipBody", desktop_i18n)
+        self.assertIn("notif.recFreshTip", desktop_i18n)
+        self.assertIn("notif.recFreshTip", desktop_main_src)
 
         legal_js = (root / "static/js/legal.js").read_text()
         self.assertNotIn("innerHTML", legal_js)

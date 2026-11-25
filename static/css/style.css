@@ -590,6 +590,36 @@ h1 {
 .dot.primary { background: var(--teal); }
 .dot.independent { background: var(--blue); }
 .dot.conflict { background: var(--red); }
+.observation-tip {
+  margin: 0 0 1rem;
+  padding: .68rem .9rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: .78rem;
+  line-height: 1.5;
+}
+.observation-tip strong { color: var(--text); margin-right: .25rem; }
+.method-tip {
+  margin: .85rem 0 0;
+  padding-top: .75rem;
+  border-top: 1px solid var(--line);
+  color: var(--text);
+  font-size: .75rem;
+  line-height: 1.5;
+}
+.fresh-callout {
+  margin: .7rem 0 0;
+  padding: .5rem .7rem;
+  border-left: 2px solid var(--blue);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: .72rem;
+  line-height: 1.45;
+}
 
 .toolbar {
   display: flex;

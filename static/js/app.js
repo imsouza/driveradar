@@ -190,6 +190,12 @@ function relativeDaysLabel(value) {
   return tr('date.daysAgo', { days: diffDays }, `há ${diffDays} dias`);
 }
 
+function releaseAgeDays(value) {
+  const date = parseDateValue(value);
+  if (!date) return null;
+  return Math.floor((Date.now() - date.getTime()) / 86_400_000);
+}
+
 function daysBetween(dateStrA, dateStrB) {
   const a = parseDateValue(dateStrA);
   const b = parseDateValue(dateStrB);
@@ -479,6 +485,11 @@ function renderDriver(vendor, data, assessment, advisorStatus) {
   fill.style.width = `${Math.max(2, score)}%`;
   meter.append(fill);
   card.append(meter);
+
+  const ageDays = releaseAgeDays(data.release_date);
+  if (ageDays !== null && ageDays >= 0 && ageDays <= 2 && !(assessment?.status === 'ready' && riskInfo.level === 'critical')) {
+    card.append(node('p', 'fresh-callout', tr('card.freshRelease')));
+  }
 
   card.append(renderCrossover(data));
   card.append(renderTechnicalReview(assessment, advisorStatus, data.structured_notes));

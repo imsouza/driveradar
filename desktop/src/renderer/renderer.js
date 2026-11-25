@@ -43,6 +43,15 @@ function formatDate(value, includeTime = false) {
     : { dateStyle: 'medium', timeZone: 'UTC' }).format(d);
 }
 
+function releaseAgeDays(value) {
+  if (!value) return null;
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(value))
+    ? new Date(`${value}T12:00:00Z`)
+    : new Date(Number(value) < 10_000_000_000 ? Number(value) * 1000 : value);
+  if (Number.isNaN(d.getTime())) return null;
+  return Math.floor((Date.now() - d.getTime()) / 86_400_000);
+}
+
 function scoreTone(score) {
   if (score >= 72) return '';
   if (score >= 50) return 'medium';
@@ -145,6 +154,8 @@ function applyStaticLabels() {
   $('#banner-install').textContent = tr('banner.install');
   $('#tab-drivers h1').textContent = tr('drivers.title');
   $('#drivers-subtitle').textContent = tr('drivers.subtitle');
+  $('#drivers-tip-title').textContent = tr('drivers.waitTipTitle');
+  $('#drivers-tip-body').textContent = tr('drivers.waitTipBody');
   $('#tab-history h1').textContent = tr('history.title');
   $('#tab-history .panel-header p').textContent = tr('history.subtitle');
   $('#history-search').placeholder = tr('history.search');
@@ -231,6 +242,11 @@ function renderDrivers(data) {
     fill.style.width = `${Math.max(2, score)}%`;
     meter.append(fill);
     card.append(meter);
+
+    const ageDays = releaseAgeDays(item.release_date);
+    if (ageDays !== null && ageDays >= 0 && ageDays <= 2 && !isCritical) {
+      card.append(node('p', 'fresh-callout', tr('drivers.freshRelease')));
+    }
 
     const conflicts = ver.conflicts || [];
     if (conflicts.length) {
@@ -762,6 +778,7 @@ function renderAbout() {
     mList.append(li);
   });
   methodSec.append(mList);
+  methodSec.append(node('p', 'about-tip', tr('about.waitTip')));
   root.append(methodSec);
 
   const riskSec = node('section', 'settings-group');
@@ -787,7 +804,7 @@ function renderAbout() {
   const baseUrl = currentSettings?.apiBaseUrl || 'https://optlabs.com.br/driveradar';
   const dl = node('dl', 'dl-grid');
   [
-    [tr('about.version'), `v${currentAppInfo?.version || '1.2.0'}`],
+    [tr('about.version'), `v${currentAppInfo?.version || '1.3.0'}`],
     [tr('about.platform'), currentAppInfo?.platform === 'win32' ? 'Windows (Electron)' : (currentAppInfo?.platform || 'Windows')],
     [tr('about.server'), baseUrl]
   ].forEach(([k, v]) => dl.append(node('dt', '', k), node('dd', '', v)));
@@ -869,7 +886,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   currentSettings = await window.driveRadar.getSettings();
   document.documentElement.dataset.theme = currentSettings.theme || 'system';
   currentAppInfo = await window.driveRadar.getAppInfo();
-  $('#app-version').textContent = `v${currentAppInfo?.version || '1.2.0'}`;
+  $('#app-version').textContent = `v${currentAppInfo?.version || '1.3.0'}`;
   applyStaticLabels();
   renderSettings();
   renderAbout();

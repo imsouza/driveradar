@@ -592,6 +592,36 @@ body {
 .method-dot.stale { background: var(--amber); }
 .method-dot.critical { background: var(--critical-border); }
 .about-links { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .95rem; }
+.observation-tip {
+  margin: 0 0 1rem;
+  padding: .62rem .85rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: .75rem;
+  line-height: 1.5;
+}
+.observation-tip strong { color: var(--text); margin-right: .25rem; }
+.fresh-callout {
+  margin: 0 0 .7rem;
+  padding: .46rem .65rem;
+  border-left: 2px solid var(--blue);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: .71rem;
+  line-height: 1.45;
+}
+.about-tip {
+  margin: .8rem 0 0;
+  padding-top: .7rem;
+  border-top: 1px solid var(--line);
+  color: var(--text);
+  font-size: .75rem;
+  line-height: 1.5;
+}
 
 .detail-dialog {
   width: min(680px, calc(100% - 32px));
