@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
-import fcntl
 import json
 import logging
 import os
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:  # Windows test runners do not provide POSIX fcntl.
+    fcntl = None  # type: ignore[assignment]
 
 from advisor import (
     SUPPORTED_LANGS,
@@ -440,10 +446,27 @@ def migrate_state(raw: Any) -> dict[str, Any]:
     return _empty_state()
 
 
+_WIN_STATE_LOCK = threading.RLock()
+
+
 class StateStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+
+    @contextlib.contextmanager
+    def _locked(self, exclusive: bool):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if fcntl is None:
+            with _WIN_STATE_LOCK:
+                yield
+            return
+        with self.lock_path.open("a+", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
 
     def _read_unlocked(self) -> dict[str, Any]:
         try:
@@ -453,13 +476,8 @@ class StateStore:
             return _empty_state()
 
     def read(self) -> dict[str, Any]:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.lock_path.open("a+", encoding="utf-8") as lock_file:
-            fcntl.flock(lock_file, fcntl.LOCK_SH)
-            try:
-                return self._read_unlocked()
-            finally:
-                fcntl.flock(lock_file, fcntl.LOCK_UN)
+        with self._locked(exclusive=False):
+            return self._read_unlocked()
 
     def update(
         self,
@@ -467,76 +485,71 @@ class StateStore:
         collected_at: int,
         verifications: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         verifications = verifications or {}
-        with self.lock_path.open("a+", encoding="utf-8") as lock_file:
-            fcntl.flock(lock_file, fcntl.LOCK_EX)
-            try:
-                state = self._read_unlocked()
-                successful = False
-                for vendor in VENDORS:
-                    release = releases[vendor]
-                    if not release.get("primary_verified") or not release.get("version"):
+        with self._locked(exclusive=True):
+            state = self._read_unlocked()
+            successful = False
+            for vendor in VENDORS:
+                release = releases[vendor]
+                if not release.get("primary_verified") or not release.get("version"):
+                    continue
+                successful = True
+                existing_by_ver = {
+                    item["version"]: item for item in state["history"].get(vendor, []) if item.get("version")
+                }
+                prev = existing_by_ver.get(release["version"], {})
+                ver_snapshot = _compact_verification_snapshot(verifications.get(vendor)) or prev.get("verification")
+                persisted = _clean_history_entry(
+                    {
+                        "version": release["version"],
+                        "date": release.get("release_date") or prev.get("date"),
+                        "channel": release.get("channel") or prev.get("channel"),
+                        "os_build": release.get("os_build") or prev.get("os_build"),
+                        "file_size": release.get("file_size") or prev.get("file_size"),
+                        "sha256": release.get("sha256") or prev.get("sha256"),
+                        "source_name": release.get("source_name"),
+                        "source_url": release.get("source_url"),
+                        "official_url": release.get("official_url"),
+                        "release_notes_url": release.get("release_notes_url")
+                        or (release.get("release_notes") or {}).get("url")
+                        or prev.get("release_notes_url"),
+                        "verified_at": collected_at,
+                        "first_seen_at": prev.get("first_seen_at") or collected_at,
+                        "primary_verified": True,
+                        "verification": ver_snapshot,
+                        "release_summary": prev.get("release_summary"),
+                        "verdict_history": prev.get("verdict_history") or [],
+                    },
+                    vendor=vendor,
+                )
+                if persisted:
+                    state["releases"][vendor] = persisted
+                    existing_by_ver[persisted["version"]] = persisted
+
+                # Enrich matching historical entries with newly discovered official metadata.
+                for recent in release.get("recent_releases") or []:
+                    r_ver = str(recent.get("version") or "").strip()
+                    if not r_ver:
                         continue
-                    successful = True
-                    existing_by_ver = {
-                        item["version"]: item for item in state["history"].get(vendor, []) if item.get("version")
-                    }
-                    prev = existing_by_ver.get(release["version"], {})
-                    ver_snapshot = _compact_verification_snapshot(verifications.get(vendor)) or prev.get("verification")
-                    persisted = _clean_history_entry(
-                        {
-                            "version": release["version"],
-                            "date": release.get("release_date") or prev.get("date"),
-                            "channel": release.get("channel") or prev.get("channel"),
-                            "os_build": release.get("os_build") or prev.get("os_build"),
-                            "file_size": release.get("file_size") or prev.get("file_size"),
-                            "sha256": release.get("sha256") or prev.get("sha256"),
-                            "source_name": release.get("source_name"),
-                            "source_url": release.get("source_url"),
-                            "official_url": release.get("official_url"),
-                            "release_notes_url": release.get("release_notes_url")
-                            or (release.get("release_notes") or {}).get("url")
-                            or prev.get("release_notes_url"),
-                            "verified_at": collected_at,
-                            "first_seen_at": prev.get("first_seen_at") or collected_at,
-                            "primary_verified": True,
-                            "verification": ver_snapshot,
-                            "release_summary": prev.get("release_summary"),
-                            "verdict_history": prev.get("verdict_history") or [],
-                        },
-                        vendor=vendor,
-                    )
-                    if persisted:
-                        state["releases"][vendor] = persisted
-                        existing_by_ver[persisted["version"]] = persisted
+                    if r_ver in existing_by_ver:
+                        item = existing_by_ver[r_ver]
+                        for field in ("channel", "os_build", "file_size", "sha256", "release_notes_url"):
+                            if recent.get(field) and not item.get(field):
+                                item[field] = recent[field]
+                        if recent.get("release_date") and not item.get("date"):
+                            item["date"] = recent["release_date"]
+                        if recent.get("official_url") and (
+                            not item.get("official_url") or item.get("official_url") == OFFICIAL_URLS.get(vendor)
+                        ):
+                            item["official_url"] = recent["official_url"]
 
-                    # Enrich matching historical entries with newly discovered official metadata.
-                    for recent in release.get("recent_releases") or []:
-                        r_ver = str(recent.get("version") or "").strip()
-                        if not r_ver:
-                            continue
-                        if r_ver in existing_by_ver:
-                            item = existing_by_ver[r_ver]
-                            for field in ("channel", "os_build", "file_size", "sha256", "release_notes_url"):
-                                if recent.get(field) and not item.get(field):
-                                    item[field] = recent[field]
-                            if recent.get("release_date") and not item.get("date"):
-                                item["date"] = recent["release_date"]
-                            if recent.get("official_url") and (
-                                not item.get("official_url") or item.get("official_url") == OFFICIAL_URLS.get(vendor)
-                            ):
-                                item["official_url"] = recent["official_url"]
+                state["history"][vendor] = _sort_history(vendor, list(existing_by_ver.values()))
 
-                    state["history"][vendor] = _sort_history(vendor, list(existing_by_ver.values()))
-
-                if successful:
-                    state["last_successful_sync"] = collected_at
-                state["schema_version"] = STATE_SCHEMA_VERSION
-                self._atomic_write(state)
-                return state
-            finally:
-                fcntl.flock(lock_file, fcntl.LOCK_UN)
+            if successful:
+                state["last_successful_sync"] = collected_at
+            state["schema_version"] = STATE_SCHEMA_VERSION
+            self._atomic_write(state)
+            return state
 
     def save_history_summary(
         self,
@@ -545,39 +558,34 @@ class StateStore:
         release_summary: dict[str, Any],
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         metadata = metadata or {}
-        with self.lock_path.open("a+", encoding="utf-8") as lock_file:
-            fcntl.flock(lock_file, fcntl.LOCK_EX)
-            try:
-                state = self._read_unlocked()
-                history = state["history"].get(vendor, [])
-                updated = False
-                for item in history:
-                    if item.get("version") == version:
-                        item["release_summary"] = release_summary
-                        item["verdict_history"] = _append_verdict_transition(
-                            item.get("verdict_history"),
-                            release_summary.get("recommendation_action"),
-                            release_summary.get("risk_level"),
-                            release_summary.get("risk_score"),
-                            release_summary.get("enriched_at"),
-                        )
-                        for key in ("release_notes_url", "channel", "file_size", "official_url"):
-                            if metadata.get(key) and not item.get(key):
-                                item[key] = metadata[key]
-                        updated = True
-                        break
-                if updated:
-                    if state["releases"].get(vendor, {}).get("version") == version:
-                        state["releases"][vendor]["release_summary"] = release_summary
-                        matched_hist = next((h for h in history if h.get("version") == version), None)
-                        if matched_hist:
-                            state["releases"][vendor]["verdict_history"] = matched_hist.get("verdict_history") or []
-                    self._atomic_write(state)
-                return state
-            finally:
-                fcntl.flock(lock_file, fcntl.LOCK_UN)
+        with self._locked(exclusive=True):
+            state = self._read_unlocked()
+            history = state["history"].get(vendor, [])
+            updated = False
+            for item in history:
+                if item.get("version") == version:
+                    item["release_summary"] = release_summary
+                    item["verdict_history"] = _append_verdict_transition(
+                        item.get("verdict_history"),
+                        release_summary.get("recommendation_action"),
+                        release_summary.get("risk_level"),
+                        release_summary.get("risk_score"),
+                        release_summary.get("enriched_at"),
+                    )
+                    for key in ("release_notes_url", "channel", "file_size", "official_url"):
+                        if metadata.get(key) and not item.get(key):
+                            item[key] = metadata[key]
+                    updated = True
+                    break
+            if updated:
+                if state["releases"].get(vendor, {}).get("version") == version:
+                    state["releases"][vendor]["release_summary"] = release_summary
+                    matched_hist = next((h for h in history if h.get("version") == version), None)
+                    if matched_hist:
+                        state["releases"][vendor]["verdict_history"] = matched_hist.get("verdict_history") or []
+                self._atomic_write(state)
+            return state
 
     def _atomic_write(self, state: dict[str, Any]) -> None:
         descriptor, temp_path = tempfile.mkstemp(

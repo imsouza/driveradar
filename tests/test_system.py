@@ -560,12 +560,12 @@ class RegistryAndFrontendTests(unittest.TestCase):
 
     def test_frontend_security_history_notifications_and_ads(self):
         root = Path(__file__).parents[1]
-        script = (root / "static/js/app.js").read_text()
-        page = (root / "static/index.html").read_text()
-        css = (root / "static/css/style.css").read_text()
-        server = (root / "app.py").read_text()
-        worker = (root / "static/service-worker.js").read_text()
-        analytics = (root / "static/js/analytics.js").read_text()
+        script = (root / "static/js/app.js").read_text(encoding="utf-8")
+        page = (root / "static/index.html").read_text(encoding="utf-8")
+        css = (root / "static/css/style.css").read_text(encoding="utf-8")
+        server = (root / "app.py").read_text(encoding="utf-8")
+        worker = (root / "static/service-worker.js").read_text(encoding="utf-8")
+        analytics = (root / "static/js/analytics.js").read_text(encoding="utf-8")
         self.assertNotIn("innerHTML", script)
         self.assertNotIn("script-src 'self' 'unsafe-inline'", server)
         self.assertIn("history-dialog", page)
@@ -584,16 +584,16 @@ class RegistryAndFrontendTests(unittest.TestCase):
         self.assertIn("ca-pub-7513394193260475", page)
         self.assertIn("G-36YL9QLC5K", page)
         self.assertIn("G-36YL9QLC5K", analytics)
-        web_i18n = (root / "static/js/i18n.js").read_text()
-        desktop_i18n = (root / "desktop/src/i18n.js").read_text()
+        web_i18n = (root / "static/js/i18n.js").read_text(encoding="utf-8")
+        desktop_i18n = (root / "desktop/src/i18n.js").read_text(encoding="utf-8")
         for code in ("pt-BR", "en", "es", "fr"):
             self.assertIn(code, web_i18n)
             self.assertIn(code, desktop_i18n)
         self.assertNotIn("innerHTML", web_i18n)
         self.assertNotIn("innerHTML", desktop_i18n)
-        desktop_renderer = (root / "desktop/src/renderer/renderer.js").read_text()
-        desktop_css = (root / "desktop/src/renderer/styles.css").read_text()
-        desktop_main = (root / "desktop/src/main.js").read_text()
+        desktop_renderer = (root / "desktop/src/renderer/renderer.js").read_text(encoding="utf-8")
+        desktop_css = (root / "desktop/src/renderer/styles.css").read_text(encoding="utf-8")
+        desktop_main = (root / "desktop/src/main.js").read_text(encoding="utf-8")
         self.assertNotIn("innerHTML", desktop_renderer)
         self.assertIn("theme-select", page)
         for theme_name in ("midnight", "nord", "forest", "sand"):
@@ -604,8 +604,8 @@ class RegistryAndFrontendTests(unittest.TestCase):
             self.assertIn(marker, script + css)
             self.assertIn(marker, desktop_renderer + desktop_css)
 
-        desktop_html = (root / "desktop/src/renderer/index.html").read_text()
-        desktop_main_src = (root / "desktop/src/main.js").read_text()
+        desktop_html = (root / "desktop/src/renderer/index.html").read_text(encoding="utf-8")
+        desktop_main_src = (root / "desktop/src/main.js").read_text(encoding="utf-8")
         self.assertIn("tab-about", desktop_html)
         self.assertIn("Confidence ≠ stability", desktop_i18n)
         self.assertIn("renderAbout", desktop_renderer)
@@ -617,10 +617,10 @@ class RegistryAndFrontendTests(unittest.TestCase):
         self.assertIn("notif.recFreshTip", desktop_i18n)
         self.assertIn("notif.recFreshTip", desktop_main_src)
 
-        legal_js = (root / "static/js/legal.js").read_text()
+        legal_js = (root / "static/js/legal.js").read_text(encoding="utf-8")
         self.assertNotIn("innerHTML", legal_js)
         for legal_name in ("privacidade.html", "termos.html"):
-            legal_html = (root / "static" / legal_name).read_text()
+            legal_html = (root / "static" / legal_name).read_text(encoding="utf-8")
             self.assertIn("i18n.js", legal_html)
             self.assertIn("legal.js", legal_html)
             self.assertIn("lang-select", legal_html)
@@ -629,8 +629,8 @@ class RegistryAndFrontendTests(unittest.TestCase):
             self.assertNotIn("fonts.googleapis.com", legal_html)
             self.assertNotIn("innerHTML", legal_html)
 
-        readme = (root / "README.md").read_text()
-        workflow = (root / ".github/workflows/release-desktop.yml").read_text()
+        readme = (root / "README.md").read_text(encoding="utf-8")
+        workflow = (root / ".github/workflows/release-desktop.yml").read_text(encoding="utf-8")
         self.assertIn("Cross-verified", readme)
         self.assertIn("Risk Evaluation", readme)
         self.assertIn("DriveRadar Desktop for Windows", workflow)
@@ -1054,12 +1054,12 @@ class SoakMaturityAndSeniorQATests(unittest.TestCase):
 
     def test_desktop_v140_parity_escalation_and_api_guard_markers(self):
         root = Path(__file__).parents[1]
-        pkg = json.loads((root / "desktop/package.json").read_text())
+        pkg = json.loads((root / "desktop/package.json").read_text(encoding="utf-8"))
         self.assertEqual(pkg["version"], "1.4.0")
-        main_js = (root / "desktop/src/main.js").read_text()
-        preload_js = (root / "desktop/src/preload.js").read_text()
-        renderer_js = (root / "desktop/src/renderer/renderer.js").read_text()
-        web_js = (root / "static/js/app.js").read_text()
+        main_js = (root / "desktop/src/main.js").read_text(encoding="utf-8")
+        preload_js = (root / "desktop/src/preload.js").read_text(encoding="utf-8")
+        renderer_js = (root / "desktop/src/renderer/renderer.js").read_text(encoding="utf-8")
+        web_js = (root / "static/js/app.js").read_text(encoding="utf-8")
         for marker in ("settings:validateApi", "notifyEscalation", "notif.escalationTitle", "tray.tagObserve"):
             self.assertIn(marker, main_js)
         self.assertIn("validateApiEndpoint", preload_js)
