@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('driveRadar', {
   getHistoryEntry: (vendor, version, lang) => ipcRenderer.invoke('history:entry', vendor, version, lang),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (partial) => ipcRenderer.invoke('settings:save', partial),
+  validateApiEndpoint: (url) => ipcRenderer.invoke('settings:validateApi', url),
   testNotification: () => ipcRenderer.invoke('notify:test'),
   getAppInfo: () => ipcRenderer.invoke('app:info'),
   checkAppUpdates: () => ipcRenderer.invoke('updater:check'),

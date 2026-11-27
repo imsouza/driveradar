@@ -16,10 +16,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup Python for backend & i18n QA
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python QA dependencies
+        run: pip install -r requirements.txt httpx
+
+      - name: Run full backend & i18n QA suite
+        run: python -m unittest discover -s tests -v
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: desktop/package-lock.json
 
@@ -49,10 +60,10 @@ jobs:
           body: |
             ## DriveRadar Desktop for Windows (${{ github.ref_name }})
 
-            - **Installer (`DriveRadar-Setup-*.exe`)**: Per-user Windows installer with shortcuts and **automatic background updates** via `https://optlabs.com.br/driveradar/updates/`.
-            - **Portable (`DriveRadar-Portable-*.exe`)**: Standalone single-file executable requiring no installation.
-            - **System Tray & Native Windows Notifications**: Minimize to the system tray and receive native Windows alerts for new NVIDIA, AMD, Intel, and Windows 11 releases, critical risk warnings, hotfix conflicts, security alerts, and DriveRadar app updates.
-            - **Multilingual & Themes**: Full support for English, Portuguese (BR), Spanish, and French (including translated AI summaries) plus 6 curated visual themes and OS theme sync.
+            - **Deterministic 96-Hour Soak Engine (`Observing`)**: Newly released drivers stay in `Observing` mode for 4 days (`96h`) with a live soak progress bar instead of premature green `Install` badges, escalating immediately to `Critical` if severe post-launch regressions emerge.
+            - **Post-Release Risk Escalation Alerts**: Native Windows notifications and verdict-change badges alert you immediately if an already-released driver escalates to `Critical` or `High` days after launch.
+            - **Full Card, Modal & Tray Parity**: System tray `[CRITICAL]` / `[OBSERVING]` tags, dynamic tooltip, Crossover point breakdown, grounded signals, verdict transition history, SHA-256 copy button, and `/health`-validated API endpoint settings with one-click reset.
+            - **Installer (`DriveRadar-Setup-*.exe`) & Portable (`DriveRadar-Portable-*.exe`)**: Automatic background updates via `https://optlabs.com.br/driveradar/updates/`, 4 languages (`en`, `pt-BR`, `es`, `fr`), and 6 curated themes + OS sync.
           files: |
             desktop/dist/latest.yml
             desktop/dist/*.exe

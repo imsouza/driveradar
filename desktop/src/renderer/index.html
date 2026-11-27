@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
   <title>DriveRadar</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -14,7 +14,7 @@
         <span class="brand-dot" aria-hidden="true"></span>
         <div>
           <strong>DriveRadar</strong>
-          <small id="app-version">v1.3.0</small>
+          <small id="app-version">v1.4.0</small>
         </div>
       </div>
       <nav class="nav-list" aria-label="Navegação">
@@ -54,8 +54,8 @@
             </div>
           </header>
           <p class="observation-tip" id="drivers-observation-tip" role="note">
-            <strong id="drivers-tip-title">Janela de observação (1–2 dias):</strong>
-            <span id="drivers-tip-body">Ao sair um driver novo, aguarde de 1 a 2 dias antes de instalar para ver o que o sistema processou das análises técnicas e possíveis alertas.</span>
+            <strong id="drivers-tip-title">Janela de maturação automática (4 dias / 96h):</strong>
+            <span id="drivers-tip-body">Lançamentos recentes permanecem Em Observação por 96h (sem selo verde prematuro) enquanto o sistema monitora relatos pós-lançamento. Se surgir falha grave a qualquer hora, o alerta muda imediatamente para Crítico.</span>
           </p>
           <div class="driver-grid" id="driver-grid"></div>
         </section>

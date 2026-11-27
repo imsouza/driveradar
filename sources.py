@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -49,27 +50,94 @@ SECURITY_SIGNAL_RE = re.compile(
     r"\bsecurity\b|\badvisory\b|\bbug\b|\bcrash|\bbsod\b|\bhotfix\b|"
     r"\bregression\b|\bout-of-band\b|\bcritical\b|\brce\b|\bremote code execution\b|"
     r"\bprivilege\b|\bbypass|\bwear(?:ing)? out\b|\bthrash|\bcorrupt|"
-    r"\bknown issue|\bemergency\b|\bpatch tuesday\b)",
+    r"\bknown issue|\bemergency\b|\bpatch tuesday\b|"
+    r"\bblack screens?\b|\bblank screens?\b|\bno display\b|"
+    r"\b(?:loss of|no|lost)\s+signal\b|\bsignal loss\b|"
+    r"\bboot\s*loop\b|\bunbootable\b|\bsystem freeze\b|\bhard lock\b|"
+    r"\bdriver timeout\b|\btdr\b|\bartifact(?:s|ing)\b|\boverheating\b|"
+    r"\bexcessive writes\b|\bschwarze[rn]?\s+bildschirm\b|"
+    r"\btreiber\b.{0,40}\bprobleme\b|\bprobleme\b.{0,40}\btreiber\b)",
     re.I,
 )
 SEVERITY_CRITICAL_RE = re.compile(
     r"\b(?:zero-day|0-day|actively exploited|emergency|out-of-band|rce|"
-    r"remote code execution|killing your ssd|thrash ssds?|wearing out)\b",
+    r"remote code execution|killing your ssd|thrash ssds?|wearing out|"
+    r"boot\s*loop|unbootable|data loss|filesystem corruption|ntfs corruption|"
+    r"pulled by|recalled driver|emergency recall|bricking)\b",
     re.I,
 )
 SEVERITY_HIGH_RE = re.compile(
     r"(?:\bcve-\d|\bvulnerab|\bprivilege|\badvisory|\bsecurity flaw|"
-    r"\barbitrary code|\bbypass(?:es|ing)?\b|\bflaw\b|\bbitlocker\b)",
+    r"\barbitrary code|\bbypass(?:es|ing)?\b|\bflaw\b|\bbitlocker\b|"
+    r"\bblack screens?\b|\bblank screens?\b|\b(?:loss of|no|lost)\s+signal\b|"
+    r"\bsignal loss\b|\bno display\b|\bsystem freeze\b|\bhard lock\b|"
+    r"\bwidespread bsod\b|\bbsod loop\b|\bexcessive writes\b|\bssd bug\b|"
+    r"\bschwarze[rn]?\s+bildschirm\b)",
     re.I,
 )
 SEVERITY_MEDIUM_RE = re.compile(
-    r"\b(?:bsod|crash|bug|regression|hotfix|known issue|broken)\b",
+    r"\b(?:bsod|crash|bug|regression|hotfix|known issue|broken|"
+    r"driver timeout|tdr|artifact(?:s|ing)|probleme)\b",
     re.I,
 )
 NON_TECHNICAL_GOSSIP_RE = re.compile(
     r"\b(?:ceo|scandal|stock|stocks|shares|earnings|valuation|market cap|"
     r"antitrust|lawsuit|black friday|cyber monday|deals?|savings|discount|"
     r"geforce now|for just \$|xbox speed)\b",
+    re.I,
+)
+IRRELEVANT_ALERT_RE = re.compile(
+    r"(?:\bgartner\b|\bmagic quadrant\b|\bforrester wave\b|"
+    r"\bphishing scam\b|\bfake webinars?\b|\bsteal google accounts\b|"
+    r"\bgift cards?\b|\bcrypto scam\b|\bromance scam\b|"
+    r"\boutage report\b|\bemails? never arrived\b|\bexchange online\b|"
+    r"\bmicrosoft 365 outage\b|\bteams outage\b|\bsharepoint\b|"
+    r"\bai boss\b|\bunreleased ai\b|\bmath problem\b)",
+    re.I,
+)
+_THREAT_INTEL_NOISE_RE = re.compile(
+    r"\b(?:threat|cyber|security|actionable|open[-\s]source|military|signals?|"
+    r"criminal|adversary|dark\s*web)\s+intel\b|"
+    r"\bintel\s+(?:agency|agencies|community|gathering|sharing|briefing|analyst|ops|report)\b",
+    re.I,
+)
+_DATACENTER_ONLY_NVIDIA_RE = re.compile(
+    r"\b(?:gb200|nvl72|dgx|hgx|h100|h200|b100|b200|grace\s+hopper|1\s+petabyte|supercomputer)\b",
+    re.I,
+)
+_CONSUMER_NVIDIA_RE = re.compile(
+    r"\b(?:geforce|game\s+ready|studio\s+driver|whql|rtx\s*[2-6]\d{2}0|gtx|dlss|nvlddmkm)\b",
+    re.I,
+)
+_INTEL_DIRECT_RE = re.compile(
+    r"\b(?:intel\s+arc|arc\s+graphics|xe\s+graphics|iris\s+xe|core\s+ultra|intel-sa-\d+)\b",
+    re.I,
+)
+_INTEL_HW_CONTEXT_RE = re.compile(
+    r"\b(?:graphics|driver|drivers|treiber|pilote|gpu|arc|cpu|processor|processors|"
+    r"chipset|firmware|bios|microcode|wi-fi|bluetooth|thunderbolt|whql|wddm|"
+    r"directx|vulkan|opengl|cve-\d)\b",
+    re.I,
+)
+_WINDOWS_CLIENT_DIRECT_RE = re.compile(
+    r"\b(?:windows\s+1[01]|windows\s+update|patch\s+tuesday|kb5\d{5,7}|bitlocker|"
+    r"windows\s+hello|windows\s+defender|wddm|win32k|ntfs|bsod)\b",
+    re.I,
+)
+_WINDOWS_GENERAL_OS_RE = re.compile(
+    r"\bwindows\b(?!\s+server\b)",
+    re.I,
+)
+_WINDOWS_OS_SIGNAL_RE = re.compile(
+    r"\b(?:update|patch|hotfix|security|driver|kernel|build|cve-\d|zero-day|0-day|"
+    r"bug|crash|bsod|black\s+screen|login|ntlm|kerberos|defender|elevation\s+of\s+privilege)\b",
+    re.I,
+)
+_TITLE_ECOSYSTEM_ANCHOR_RE = re.compile(
+    r"\b(?:nvidia|geforce|rtx|gtx|dlss|amd|radeon|adrenalin|ryzen|intel|arc|"
+    r"windows\s+1[01]|windows\s+update|patch\s+tuesday|kb5\d{5,7}|bitlocker|"
+    r"gpu|graphics|driver|drivers|treiber|pilote|controlador|whql|wddm|directx|vulkan|"
+    r"bsod|black\s+screens?|ssd\s+bug|cve-\d|zero-day|0-day)\b",
     re.I,
 )
 WINDOWS_NON_CONFLICT_BRANCH_RE = re.compile(
@@ -79,9 +147,9 @@ WINDOWS_NON_CONFLICT_BRANCH_RE = re.compile(
 
 VENDOR_CONTEXT = {
     "nvidia": ("nvidia", "geforce", "rtx", "gtx", "game ready", "studio driver", "dlss"),
-    "amd": ("amd", "radeon", "adrenalin", "fsr", "rx"),
+    "amd": ("amd", "radeon", "adrenalin", "fsr", "ryzen"),
     "intel": ("intel", "arc", "core ultra", "xe graphics", "iris xe"),
-    "windows": ("windows 11", "windows 10", "windows update", "windows hello", "bitlocker", "patch tuesday", "microsoft", "kb5"),
+    "windows": ("windows 11", "windows 10", "windows update", "windows hello", "bitlocker", "patch tuesday", "kb5"),
 }
 VENDOR_CONTEXT_REGEX = {
     vendor: re.compile(
@@ -270,7 +338,10 @@ def _version_in_text(version: str, text: str, vendor: str | None = None) -> bool
         return False
     resolved_vendor = vendor or _infer_vendor(version)
     if resolved_vendor and resolved_vendor in VENDOR_CONTEXT_REGEX:
-        if not VENDOR_CONTEXT_REGEX[resolved_vendor].search(text):
+        if resolved_vendor == "windows":
+            if not (VENDOR_CONTEXT_REGEX["windows"].search(text) or re.search(r"\b(?:windows|microsoft)\b", text, re.I)):
+                return False
+        elif not VENDOR_CONTEXT_REGEX[resolved_vendor].search(_THREAT_INTEL_NOISE_RE.sub(" ", text)):
             return False
     for alias in _version_aliases(version, resolved_vendor):
         pattern = rf"(?<![0-9A-Za-z.]){re.escape(alias)}(?![0-9A-Za-z.])"
@@ -280,11 +351,28 @@ def _version_in_text(version: str, text: str, vendor: str | None = None) -> bool
 
 
 def _match_vendors(text: str) -> list[str]:
-    return [
-        vendor
-        for vendor, pattern in VENDOR_CONTEXT_REGEX.items()
-        if pattern.search(text)
-    ]
+    if not text:
+        return []
+    matched: list[str] = []
+    if VENDOR_CONTEXT_REGEX["nvidia"].search(text):
+        if not (_DATACENTER_ONLY_NVIDIA_RE.search(text) and not _CONSUMER_NVIDIA_RE.search(text)):
+            matched.append("nvidia")
+    if VENDOR_CONTEXT_REGEX["amd"].search(text) or re.search(r"\brx\s*\d{3,4}\b", text, re.I):
+        matched.append("amd")
+    intel_clean = _THREAT_INTEL_NOISE_RE.sub(" ", text)
+    if _INTEL_DIRECT_RE.search(intel_clean) or (
+        re.search(r"\bintel\b", intel_clean, re.I) and _INTEL_HW_CONTEXT_RE.search(intel_clean)
+    ):
+        matched.append("intel")
+    has_win_server_only = bool(re.search(r"\bwindows\s+server\b", text, re.I)) and not bool(
+        re.search(r"\bwindows\s+1[01]\b", text, re.I)
+    )
+    if not has_win_server_only:
+        if _WINDOWS_CLIENT_DIRECT_RE.search(text) or (
+            _WINDOWS_GENERAL_OS_RE.search(text) and _WINDOWS_OS_SIGNAL_RE.search(text)
+        ):
+            matched.append("windows")
+    return matched
 
 
 def _classify_alert_severity(text: str, source: Source) -> str:
@@ -297,40 +385,66 @@ def _classify_alert_severity(text: str, source: Source) -> str:
     return "info"
 
 
+DEFAULT_SOURCE_AUDIT_TTL = int(os.getenv("SOURCE_AUDIT_TTL_SECONDS", "2700"))
+
+
 class SourceHub:
-    def __init__(self, refresh_ttl: int = 21_600) -> None:
+    def __init__(self, refresh_ttl: int = DEFAULT_SOURCE_AUDIT_TTL) -> None:
         self.refresh_ttl = refresh_ttl
         self._cache: dict[str, Any] | None = None
         self._cache_time = 0.0
+        self._http_cache: dict[str, dict[str, Any]] = {}
+        self._http_lock = threading.Lock()
         self._lock = threading.Lock()
 
-    @staticmethod
-    def _fetch(source: Source, targets: dict[str, str]) -> dict[str, Any]:
+    def _fetch(self, source: Source, targets: dict[str, str]) -> dict[str, Any]:
         started = time.monotonic()
         response = None
+        with self._http_lock:
+            cached_http = dict(self._http_cache.get(source.id) or {})
+        headers = {"User-Agent": USER_AGENT}
+        if cached_http.get("etag"):
+            headers["If-None-Match"] = str(cached_http["etag"])
+        if cached_http.get("last_modified"):
+            headers["If-Modified-Since"] = str(cached_http["last_modified"])
         try:
             response = requests.get(
                 source.url,
-                headers={"User-Agent": USER_AGENT},
+                headers=headers,
                 timeout=SOURCE_TIMEOUT,
                 stream=True,
             )
-            response.raise_for_status()
-            chunks = []
-            total = 0
-            for chunk in response.iter_content(65_536):
-                if time.monotonic() - started > MAX_SOURCE_SECONDS:
-                    raise requests.Timeout("source exceeded total time limit")
-                if not chunk:
-                    continue
-                remaining = MAX_SOURCE_BYTES - total
-                chunks.append(chunk[:remaining])
-                total += len(chunks[-1])
-                if total >= MAX_SOURCE_BYTES:
-                    break
-            body = b"".join(chunks)
-            documents = SourceHub._extract_documents(source, body)
-            alerts = SourceHub._extract_alerts(source, body)
+            if response.status_code == 304 and "documents" in cached_http and "alerts" in cached_http:
+                documents = cached_http["documents"]
+                alerts = cached_http["alerts"]
+            else:
+                response.raise_for_status()
+                chunks = []
+                total = 0
+                for chunk in response.iter_content(65_536):
+                    if time.monotonic() - started > MAX_SOURCE_SECONDS:
+                        raise requests.Timeout("source exceeded total time limit")
+                    if not chunk:
+                        continue
+                    remaining = MAX_SOURCE_BYTES - total
+                    chunks.append(chunk[:remaining])
+                    total += len(chunks[-1])
+                    if total >= MAX_SOURCE_BYTES:
+                        break
+                body = b"".join(chunks)
+                documents = SourceHub._extract_documents(source, body)
+                alerts = SourceHub._extract_alerts(source, body)
+                resp_headers = getattr(response, "headers", None) or {}
+                etag = resp_headers.get("ETag") or resp_headers.get("etag")
+                last_mod = resp_headers.get("Last-Modified") or resp_headers.get("last-modified")
+                if etag or last_mod:
+                    with self._http_lock:
+                        self._http_cache[source.id] = {
+                            "etag": etag,
+                            "last_modified": last_mod,
+                            "documents": documents,
+                            "alerts": alerts,
+                        }
             matched_versions: dict[str, dict[str, Any]] = {}
             for vendor, version in targets.items():
                 if not version:
@@ -378,6 +492,18 @@ class SourceHub:
         if NON_TECHNICAL_GOSSIP_RE.search(title_low) and not re.search(
             r"(?:\bcve-\d|\bvulnerab|\bflaw\b|\bhotfix\b|\bbug\b)", title_low
         ):
+            return False
+        if IRRELEVANT_ALERT_RE.search(combined_low) and not re.search(
+            r"(?:\bgeforce\b|\bradeon\b|\badrenalin\b|\bintel\s+arc\b|\bkb5\d{5,7}\b)", title_low
+        ):
+            return False
+        if re.search(r"\bwindows\s+server\b", combined_low) and not re.search(
+            r"\bwindows\s+1[01]\b", combined_low
+        ):
+            return False
+        if _DATACENTER_ONLY_NVIDIA_RE.search(combined_low) and not _CONSUMER_NVIDIA_RE.search(combined_low):
+            return False
+        if not (_match_vendors(title) or _TITLE_ECOSYSTEM_ANCHOR_RE.search(title)):
             return False
         has_target = bool(_match_vendors(combined)) or any(
             t in combined_low for t in ("gpu driver", "graphics driver", "directx", "vulkan")

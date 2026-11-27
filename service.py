@@ -11,12 +11,31 @@ import os
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from advisor import SUPPORTED_LANGS, TRANSLATION_TARGET_LANGS, AIAdvisorPool, evaluate_risk_policy
+from advisor import (
+    SUPPORTED_LANGS,
+    TRANSLATION_TARGET_LANGS,
+    AIAdvisorPool,
+    compute_release_maturity,
+    evaluate_risk_policy,
+)
 from monitor import OFFICIAL_URLS, UpdateMonitor
-from sources import SOURCES, SourceHub, parse_version_tuple
+from sources import (
+    CONFLICT_VERSION_PATTERNS,
+    DRIVER_UPDATE_CONTEXT,
+    IRRELEVANT_ALERT_RE,
+    NON_TECHNICAL_GOSSIP_RE,
+    SECURITY_SIGNAL_RE,
+    SOURCES,
+    SourceHub,
+    _match_vendors,
+    _parse_datetime,
+    _version_in_text,
+    parse_version_tuple,
+)
 
 LOGGER = logging.getLogger(__name__)
 VENDORS = ("nvidia", "amd", "intel", "windows")
@@ -210,6 +229,66 @@ def _clean_history_entry(entry: dict[str, Any], vendor: str = "") -> dict[str, A
         "primary_verified": True,
         "verification": entry.get("verification"),
         "release_summary": entry.get("release_summary"),
+        "verdict_history": list(entry.get("verdict_history") or [])[-8:],
+    }
+
+
+_ACTION_SEVERITY_RANK = {"install": 0, "observe": 1, "wait": 2, "do_not_install": 4}
+_RISK_SEVERITY_RANK = {"low": 0, "moderate": 1, "high": 2, "critical": 4}
+
+
+def _append_verdict_transition(
+    existing: list[dict[str, Any]] | None,
+    action: str | None,
+    risk_level: str | None,
+    risk_score: int | None,
+    at: int | None = None,
+) -> list[dict[str, Any]]:
+    history = [dict(x) for x in (existing or []) if isinstance(x, dict)]
+    clean_action = str(action or "wait").strip().lower()
+    clean_risk = str(risk_level or "moderate").strip().lower()
+    ts = int(at or time.time())
+    if not history:
+        history.append({
+            "action": clean_action,
+            "risk_level": clean_risk,
+            "risk_score": risk_score,
+            "at": ts,
+        })
+        return history[-8:]
+    last = history[-1]
+    if last.get("action") != clean_action or last.get("risk_level") != clean_risk:
+        history.append({
+            "action": clean_action,
+            "risk_level": clean_risk,
+            "risk_score": risk_score,
+            "prev_action": last.get("action"),
+            "prev_risk_level": last.get("risk_level"),
+            "at": ts,
+        })
+    return history[-8:]
+
+
+def _latest_verdict_change(verdict_history: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    if not isinstance(verdict_history, list) or len(verdict_history) < 2:
+        return None
+    prev = verdict_history[-2]
+    curr = verdict_history[-1]
+    prev_rank = max(
+        _ACTION_SEVERITY_RANK.get(str(prev.get("action") or ""), 0),
+        _RISK_SEVERITY_RANK.get(str(prev.get("risk_level") or ""), 0),
+    )
+    curr_rank = max(
+        _ACTION_SEVERITY_RANK.get(str(curr.get("action") or ""), 0),
+        _RISK_SEVERITY_RANK.get(str(curr.get("risk_level") or ""), 0),
+    )
+    return {
+        "from_action": prev.get("action"),
+        "to_action": curr.get("action"),
+        "from_risk": prev.get("risk_level"),
+        "to_risk": curr.get("risk_level"),
+        "changed_at": curr.get("at"),
+        "escalated": curr_rank > prev_rank,
     }
 
 
@@ -277,6 +356,16 @@ def _project_summary_lang(summary: dict[str, Any] | None, lang: str) -> dict[str
     for list_field in ("critical_reasons", "highlights", "fixed_issues", "known_issues", "watch_items"):
         if isinstance(tblock.get(list_field), list) and (tblock.get(list_field) or not projected.get(list_field)):
             projected[list_field] = list(tblock[list_field])
+    return projected
+
+
+def localize_history_entry(entry: dict[str, Any] | None, lang: str | None) -> dict[str, Any] | None:
+    """Project a single history entry's release_summary to the requested language."""
+    if not isinstance(entry, dict) or lang not in TRANSLATION_TARGET_LANGS:
+        return entry
+    projected = copy.deepcopy(entry)
+    if isinstance(projected.get("release_summary"), dict):
+        projected["release_summary"] = _project_summary_lang(projected["release_summary"], lang)
     return projected
 
 
@@ -414,6 +503,7 @@ class StateStore:
                             "primary_verified": True,
                             "verification": ver_snapshot,
                             "release_summary": prev.get("release_summary"),
+                            "verdict_history": prev.get("verdict_history") or [],
                         },
                         vendor=vendor,
                     )
@@ -466,6 +556,13 @@ class StateStore:
                 for item in history:
                     if item.get("version") == version:
                         item["release_summary"] = release_summary
+                        item["verdict_history"] = _append_verdict_transition(
+                            item.get("verdict_history"),
+                            release_summary.get("recommendation_action"),
+                            release_summary.get("risk_level"),
+                            release_summary.get("risk_score"),
+                            release_summary.get("enriched_at"),
+                        )
                         for key in ("release_notes_url", "channel", "file_size", "official_url"):
                             if metadata.get(key) and not item.get(key):
                                 item[key] = metadata[key]
@@ -474,6 +571,9 @@ class StateStore:
                 if updated:
                     if state["releases"].get(vendor, {}).get("version") == version:
                         state["releases"][vendor]["release_summary"] = release_summary
+                        matched_hist = next((h for h in history if h.get("version") == version), None)
+                        if matched_hist:
+                            state["releases"][vendor]["verdict_history"] = matched_hist.get("verdict_history") or []
                     self._atomic_write(state)
                 return state
             finally:
@@ -577,9 +677,12 @@ class DriveRadarService:
                         "weight": 1.0,
                     }
                 )
+            first_seen_at = persisted.get("first_seen_at") or persisted.get("verified_at")
+            v_hist = list(persisted.get("verdict_history") or [])
             item = {
                 "version": version,
                 "release_date": persisted.get("date"),
+                "first_seen_at": first_seen_at,
                 "channel": persisted.get("channel"),
                 "os_build": persisted.get("os_build"),
                 "file_size": persisted.get("file_size"),
@@ -589,6 +692,11 @@ class DriveRadarService:
                 "source_name": persisted.get("source_name"),
                 "release_notes_url": persisted.get("release_notes_url"),
                 "source_status": "stale",
+                "maturity": compute_release_maturity(
+                    persisted.get("date"), first_seen_at, channel=persisted.get("channel")
+                ),
+                "verdict_history": v_hist,
+                "verdict_change": _latest_verdict_change(v_hist),
                 "structured_notes": {"highlights": [], "fixed_issues": [], "known_issues": []},
                 "verification": build_verification(
                     {"version": version, "evidence": evidence}, [], stale=True
@@ -707,13 +815,28 @@ class DriveRadarService:
                 "known_issues": [],
             }
 
+            effective_ver = effective.get("version")
+            existing_hist_entry = next(
+                (h for h in pre_state.get("history", {}).get(vendor, []) if h.get("version") == effective_ver),
+                persisted if persisted.get("version") == effective_ver else {},
+            )
+            first_seen_at = (
+                existing_hist_entry.get("first_seen_at")
+                or existing_hist_entry.get("verified_at")
+                or (collected_at if effective_ver else None)
+            )
+            v_hist = list(existing_hist_entry.get("verdict_history") or [])
+            rel_date = effective.get("release_date") or effective.get("date")
+            eff_channel = effective.get("channel")
             drivers[vendor] = {
-                "version": effective.get("version"),
-                "release_date": effective.get("release_date") or effective.get("date"),
-                "channel": effective.get("channel"),
+                "version": effective_ver,
+                "release_date": rel_date,
+                "first_seen_at": first_seen_at,
+                "channel": eff_channel,
                 "os_build": effective.get("os_build"),
                 "file_size": effective.get("file_size"),
                 "sha256": effective.get("sha256"),
+                "hotfix_available": live.get("hotfix_available"),
                 "official_url": effective.get("official_url") or OFFICIAL_URLS[vendor],
                 "source_url": effective.get("source_url"),
                 "source_name": effective.get("source_name"),
@@ -727,10 +850,15 @@ class DriveRadarService:
                     if live.get("verified")
                     else "unavailable"
                 ),
+                "maturity": compute_release_maturity(
+                    rel_date, first_seen_at, now_ts=collected_at, channel=eff_channel
+                ),
+                "verdict_history": v_hist,
+                "verdict_change": _latest_verdict_change(v_hist),
                 "structured_notes": structured_notes,
                 "verification": verification,
                 "feedback": {
-                    "version": effective.get("version"),
+                    "version": effective_ver,
                     "status": "Sem dados suficientes",
                     "sentiment": "Indeterminado",
                     "pros": [],
@@ -747,7 +875,16 @@ class DriveRadarService:
         state = self.store.update(releases, collected_at, verifications=verifications)
 
         analysis_evidence: dict[str, list[dict[str, Any]]] = {vendor: [] for vendor in VENDORS}
-        documents = source_audit.get("knowledge_documents", [])
+        min_dt = datetime.min.replace(tzinfo=timezone.utc)
+        sorted_documents = sorted(
+            source_audit.get("knowledge_documents", []),
+            key=lambda doc: (
+                (_parse_datetime(doc.get("published_at")) or min_dt).timestamp(),
+                float(doc.get("weight") or 0.0),
+            ),
+            reverse=True,
+        )
+        now_dt = datetime.fromtimestamp(collected_at, tz=timezone.utc)
         for vendor in VENDORS:
             version = str(drivers[vendor].get("version") or "").strip()
             release_notes = releases[vendor].get("release_notes") or {}
@@ -765,19 +902,30 @@ class DriveRadarService:
                     "tier": "primary",
                     "published_at": drivers[vendor].get("release_date"),
                 })
+            hotfix_avail = releases[vendor].get("hotfix_available")
+            if isinstance(hotfix_avail, dict) and hotfix_avail.get("version"):
+                analysis_evidence[vendor].append({
+                    "title": f"Hotfix oficial mais recente disponível: {hotfix_avail.get('channel')} {hotfix_avail['version']}",
+                    "summary": f"O fabricante disponibilizou a versão {hotfix_avail['version']} ({hotfix_avail.get('channel')}) posterior ao WHQL atual {version}.",
+                    "url": hotfix_avail.get("source_url") or OFFICIAL_URLS[vendor],
+                    "publisher": vendor.upper(),
+                    "tier": "primary",
+                    "published_at": hotfix_avail.get("release_date"),
+                })
             if not version:
                 continue
-            version_terms = {version.casefold()}
+            version_aliases = [version]
             if version.startswith("32.0."):
-                version_terms.add(version.removeprefix("32.0.").casefold())
-            # Also include conflicting newer versions mentioned for this vendor so the advisor sees them.
+                version_aliases.append(version.removeprefix("32.0."))
             for conf in verifications[vendor].get("conflicts", []):
                 if conf.get("version"):
-                    version_terms.add(str(conf["version"]).casefold())
+                    version_aliases.append(str(conf["version"]))
             seen_urls = {item.get("url") for item in analysis_evidence[vendor]}
-            for document in documents:
-                haystack = f"{document.get('title', '')} {document.get('summary', '')}".casefold()
-                if not any(term in haystack for term in version_terms):
+
+            # Pass 1: Explicit version mentions with vendor context (most recent first).
+            for document in sorted_documents:
+                haystack = f"{document.get('title', '')} {document.get('summary', '')}"
+                if not any(_version_in_text(alias, haystack, vendor) for alias in version_aliases):
                     continue
                 url = document.get("url")
                 if not url or url in seen_urls:
@@ -793,6 +941,54 @@ class DriveRadarService:
                 seen_urls.add(url)
                 if len(analysis_evidence[vendor]) >= 10:
                     break
+
+            # Pass 2: Recent versionless regression/defect reports strictly within the release window.
+            rel_dt = _parse_datetime(drivers[vendor].get("release_date"))
+            window_floor = max(
+                now_dt - timedelta(days=10),
+                (rel_dt - timedelta(days=1)) if rel_dt else (now_dt - timedelta(days=7)),
+            )
+            if len(analysis_evidence[vendor]) < 10:
+                for document in sorted_documents:
+                    url = document.get("url")
+                    if not url or url in seen_urls or document.get("tier") in {"community", "social"}:
+                        continue
+                    pub_dt = _parse_datetime(document.get("published_at"))
+                    if not pub_dt or pub_dt < window_floor:
+                        continue
+                    title = str(document.get("title") or "")
+                    summary = str(document.get("summary") or "")
+                    combined = f"{title} {summary}"
+                    combined_low = combined.casefold()
+                    if NON_TECHNICAL_GOSSIP_RE.search(title.casefold()) or IRRELEVANT_ALERT_RE.search(combined_low):
+                        continue
+                    if vendor not in _match_vendors(title):
+                        continue
+                    if not any(ctx in combined_low for ctx in DRIVER_UPDATE_CONTEXT):
+                        continue
+                    if not SECURITY_SIGNAL_RE.search(combined):
+                        continue
+                    mentioned_vers = {
+                        m.group(1).upper() if vendor == "windows" else m.group(1)
+                        for m in CONFLICT_VERSION_PATTERNS[vendor].finditer(combined)
+                    }
+                    # Skip articles explicitly about a different (e.g. older) version.
+                    if mentioned_vers and not any(
+                        mv in {a.upper() if vendor == "windows" else a for a in version_aliases}
+                        for mv in mentioned_vers
+                    ):
+                        continue
+                    analysis_evidence[vendor].append({
+                        "title": title,
+                        "summary": summary[:1_500],
+                        "url": url,
+                        "publisher": document.get("publisher") or document.get("source_name"),
+                        "tier": document.get("tier"),
+                        "published_at": document.get("published_at"),
+                    })
+                    seen_urls.add(url)
+                    if len(analysis_evidence[vendor]) >= 10:
+                        break
         self._analysis_evidence = analysis_evidence
 
         payload = {
@@ -826,16 +1022,15 @@ class DriveRadarService:
 
     async def get_data(self, force: bool = False) -> dict[str, Any]:
         if not force and self.use_shared_snapshot:
-            shared = self._load_shared_snapshot()
+            shared = await asyncio.to_thread(self._load_shared_snapshot)
             if shared:
                 collected_at = (shared.get("collection") or {}).get("collected_at") or shared.get("last_updated") or 0
                 age = max(0, int(time.time()) - int(collected_at))
-                if age < self.cache_ttl:
-                    self._cache = shared
-                    self._cache_time = time.monotonic() - age
-                    response = copy.deepcopy(shared)
-                    response["cache_age_seconds"] = age
-                    return response
+                self._cache = shared
+                self._cache_time = time.monotonic() - min(age, self.cache_ttl)
+                response = copy.deepcopy(shared)
+                response["cache_age_seconds"] = age
+                return response
 
         now = time.monotonic()
         if not force and self._cache and now - self._cache_time < self.cache_ttl:
@@ -889,8 +1084,9 @@ class DriveRadarService:
                 LOGGER.exception("Advisor pool refresh failed")
                 return
 
-            # Persist ready assessments directly into the corresponding history versions.
-            assessments = state.get("assessments") or {}
+            # Persist ready assessments directly into the corresponding history versions (using live maturity-adjusted action).
+            live_public = self.advisor.public_state(snapshot.get("drivers", {}))
+            assessments = live_public.get("assessments") or state.get("assessments") or {}
             updated_state = None
             for vendor, assessment in assessments.items():
                 summary = _summary_from_assessment(assessment, state.get("last_analysis_at"))
@@ -906,6 +1102,16 @@ class DriveRadarService:
                     self._cache["advisor"] = self.advisor.public_state(self._cache["drivers"])
                     if updated_state:
                         self._cache["history"] = updated_state["history"]
+                        for vendor in VENDORS:
+                            cur_ver = self._cache["drivers"].get(vendor, {}).get("version")
+                            hist_item = next(
+                                (h for h in updated_state["history"].get(vendor, []) if h.get("version") == cur_ver),
+                                None,
+                            )
+                            if hist_item:
+                                vh = list(hist_item.get("verdict_history") or [])
+                                self._cache["drivers"][vendor]["verdict_history"] = vh
+                                self._cache["drivers"][vendor]["verdict_change"] = _latest_verdict_change(vh)
                     self._write_shared_snapshot(self._cache)
 
     async def enrich_history_entry(self, vendor: str, version: str, lang: str = "pt-BR") -> dict[str, Any] | None:

@@ -191,12 +191,49 @@ class CrossoverAndSourceTests(unittest.TestCase):
         self.assertFalse(SourceHub._is_relevant_alert("Nvidia CEO Scandal Rocks AI Industry", "Stock news"))
         self.assertFalse(SourceHub._is_relevant_alert("Season's Streamings and Savings: Black Friday Deals Come to GeForce NOW", "GeForce NOW Black Friday"))
         self.assertFalse(SourceHub._is_relevant_alert("Microsoft Unlocks Up To 16% More Xbox Speed With Open-Source AMD Code", "DirectX open-source performance boost"))
+        # Real-world production false positives (must all be rejected):
+        self.assertFalse(SourceHub._is_relevant_alert(
+            "Hackers Compromise 24 Check Point Management Servers in Suspected AI-Driven Attack Campaign",
+            "Cyber threat intel researchers warn of critical security exploit.",
+        ))
+        self.assertEqual(_match_vendors("Cyber threat intel researchers warn of critical security exploit"), [])
+        self.assertFalse(SourceHub._is_relevant_alert(
+            "Microsoft pushes emergency hotpatch to fix Windows Server crashes",
+            "Emergency update resolves Windows Server 2025 restarts.",
+        ))
+        self.assertFalse(SourceHub._is_relevant_alert(
+            "Phishing scam uses fake webinars and $500 incentives to steal Google accounts",
+            "Attackers impersonate Nvidia and Zoom webinars in security scam.",
+        ))
+        self.assertFalse(SourceHub._is_relevant_alert(
+            "Kioxia and Nvidia demo 144 SSDs that expand GPU memory past 1 petabyte in a GB200 NVL72 rack",
+            "Datacenter rack architecture critical milestone.",
+        ))
+        self.assertFalse(SourceHub._is_relevant_alert(
+            "“We are crossing a threshold”: Microsoft’s AI boss warns after an unreleased AI produced a proof for a 150-year-old math problem",
+            "Emergency safety discussion around AI lab models.",
+        ))
+        self.assertFalse(SourceHub._is_relevant_alert(
+            "Microsoft named a Leader in the 2026 Gartner Magic Quadrant for Email Security",
+            "Enterprise security report recognition.",
+        ))
+        self.assertFalse(SourceHub._is_relevant_alert(
+            "Microsoft's Final Outage Report Blames a July Bug and Confirms Some Emails Never Arrived",
+            "Exchange Online bug caused delayed emails.",
+        ))
+        # Genuine driver & OS security/regression alerts (must be kept and accurately rated):
         self.assertTrue(SourceHub._is_relevant_alert("NVIDIA GeForce Hotfix 621.35 fixes Windows 11 SSD bug", "Driver update"))
         self.assertTrue(SourceHub._is_relevant_alert("Windows 11 KB5132057 patch fixes elevation of privilege CVE-2026-9999", "Microsoft update"))
+        tpu_black_screen = "NVIDIA GeForce 621.40 Stops the SSD Writes, but Now Users Report Black Screens"
+        self.assertTrue(SourceHub._is_relevant_alert(tpu_black_screen, "Users report loss of signal after updating."))
+        src = Source("neowin", "Neowin", "Neowin", "https://neowin.test", "specialist", 0.74)
+        self.assertEqual(_classify_alert_severity(tpu_black_screen, src), "high")
+        de_treiber = "GeForce-Treiber 621.40: Nach dem Hotfix macht auch der neue Treiber Probleme"
+        self.assertTrue(SourceHub._is_relevant_alert(de_treiber, "Schwarzer Bildschirm nach GeForce-Treiber Update."))
+        self.assertEqual(_classify_alert_severity(f"{de_treiber} Schwarzer Bildschirm", src), "high")
         bitlocker = "FastUnlock zero-day bypasses BitLocker on fully patched Windows 11"
         self.assertTrue(SourceHub._is_relevant_alert(bitlocker, "Security flaw"))
         self.assertEqual(_match_vendors(bitlocker), ["windows"])
-        src = Source("neowin", "Neowin", "Neowin", "https://neowin.test", "specialist", 0.74)
         self.assertEqual(_classify_alert_severity(bitlocker, src), "critical")
 
     def test_amd_official_driver_page_extracts_date_and_full_package_size(self):
@@ -624,6 +661,413 @@ class RegistryAndFrontendTests(unittest.TestCase):
                 self.assertEqual(yml_resp.headers["cache-control"], "no-cache")
             finally:
                 web_app.RELEASES_DIR = original_dir
+
+
+class SoakMaturityAndSeniorQATests(unittest.TestCase):
+    def test_monitor_uses_thread_local_http_sessions(self):
+        import concurrent.futures
+        import threading
+        monitor = UpdateMonitor()
+        barrier = threading.Barrier(2)
+
+        def grab(_):
+            sess = monitor.session
+            barrier.wait(timeout=5)
+            return sess
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            s1, s2 = list(pool.map(grab, range(2)))
+        self.assertIsNot(s1, s2)
+        self.assertIsNot(s1, monitor.session)
+
+    def test_clause_guardrail_catches_regression_after_mitigated_clause(self):
+        # Clause 1 says SSD bug was fixed ("corrigido"), Clause 2 reports black screens!
+        corroborated = evaluate_risk_policy(
+            {
+                "risk_assessment": {"level": "moderate", "score": 40, "categories": ["regression"], "critical_reasons": []},
+                "recommendation": {
+                    "action": "wait",
+                    "reason": "Embora o bug de gravação no SSD tenha sido corrigido, há relatos de telas pretas e perda de sinal de vídeo.",
+                },
+                "risk_signals": [{"text": "Embora o bug de gravação no SSD tenha sido corrigido, há relatos de telas pretas."}],
+            },
+            cited_records=[
+                {"publisher": "TechPowerUp", "tier": "specialist", "kind": "technical", "title": "NVIDIA 621.40 Stops the SSD Writes, but Now Users Report Black Screens"},
+                {"publisher": "ComputerBase", "tier": "established", "kind": "technical", "title": "GeForce 621.40: Nach dem Hotfix schwarzer Bildschirm"},
+            ],
+        )
+        self.assertEqual(corroborated["risk_assessment"]["level"], "critical")
+        self.assertEqual(corroborated["action"], "do_not_install")
+        self.assertIn("system_crash", corroborated["risk_assessment"]["categories"])
+        # Mitigated SSD clause must NOT trigger hardware_damage!
+        self.assertNotIn("hardware_damage", corroborated["risk_assessment"]["categories"])
+
+    def test_corroboration_holds_single_secondary_rumor_at_high_wait(self):
+        single_rumor = evaluate_risk_policy(
+            {
+                "risk_assessment": {"level": "critical", "score": 88, "categories": ["system_crash"], "critical_reasons": ["Relato isolado de tela preta"]},
+                "recommendation": {"action": "do_not_install", "reason": "Um blog reportou telas pretas."},
+                "risk_signals": [{"text": "Users report black screens after updating."}],
+            },
+            cited_records=[
+                {"publisher": "SingleBlog", "tier": "specialist", "kind": "technical", "title": "Users report black screens on new GPU driver"},
+            ],
+        )
+        self.assertEqual(single_rumor["risk_assessment"]["level"], "high")
+        self.assertEqual(single_rumor["action"], "wait")
+        self.assertLess(single_rumor["risk_assessment"]["score"], 80)
+
+    def test_soak_engine_quarantines_fresh_release_and_graduates_after_96h(self):
+        from advisor import compute_release_maturity
+        now_ts = 1_795_788_000.0  # 2026-11-27 14:00 UTC
+        first_seen = int(now_ts - 18 * 3600)  # 18h old (Day 1 of 4)
+        mat = compute_release_maturity("2026-11-27", first_seen, now_ts=now_ts, channel="WHQL")
+        self.assertTrue(mat["in_quarantine"])
+        self.assertEqual(mat["soak_day"], 1)
+        self.assertEqual(mat["state"], "observing")
+
+        # Clean fresh GPU driver must receive 'observe', NEVER premature green 'install'
+        fresh_gpu = evaluate_risk_policy(
+            {
+                "risk_assessment": {"level": "low", "score": 12, "categories": [], "critical_reasons": []},
+                "recommendation": {"action": "install", "reason": "Notas oficiais limpas."},
+                "positive_signals": [{"text": "Suporte Game Ready otimizado."}],
+            },
+            driver_info={"release_date": "2026-11-27", "first_seen_at": first_seen, "channel": "WHQL"},
+            now_ts=now_ts,
+        )
+        self.assertEqual(fresh_gpu["action"], "observe")
+        self.assertEqual(fresh_gpu["post_soak_action"], "install")
+        self.assertEqual(fresh_gpu["risk_assessment"]["level"], "low")
+
+        # Urgent Patch Tuesday (B) security fix with zero regressions bypasses quarantine
+        urgent_patch = evaluate_risk_policy(
+            {
+                "risk_assessment": {"level": "low", "score": 10, "categories": [], "critical_reasons": []},
+                "recommendation": {"action": "install", "reason": "Corrige CVE-2026-7777 ativamente explorada."},
+                "positive_signals": [{"text": "Patches actively exploited CVE-2026-7777."}],
+            },
+            driver_info={"release_date": "2026-11-27", "first_seen_at": first_seen, "channel": "Patch Tuesday (B)"},
+            now_ts=now_ts,
+        )
+        self.assertEqual(urgent_patch["action"], "install")
+        self.assertTrue(urgent_patch["maturity"]["security_bypass"])
+
+        # Severe defect at Hour 2 jumps straight to do_not_install (never delayed by soak)
+        hour2_critical = evaluate_risk_policy(
+            {
+                "risk_assessment": {"level": "low", "score": 15, "categories": [], "critical_reasons": []},
+                "recommendation": {"action": "install", "reason": "Novo lançamento."},
+                "risk_signals": [{"text": "Driver causes severe SSD excessive writes (30GB/h) wearing out NVMe drives."}],
+            },
+            driver_info={"release_date": "2026-11-27", "first_seen_at": int(now_ts - 2 * 3600), "channel": "WHQL"},
+            now_ts=now_ts,
+        )
+        self.assertEqual(hour2_critical["action"], "do_not_install")
+        self.assertEqual(hour2_critical["risk_assessment"]["level"], "critical")
+
+        # Dynamic graduation across 96h in public_state without re-calling LLM
+        with tempfile.TemporaryDirectory() as tmp:
+            pool = AIAdvisorPool(Path(tmp) / "advisor.json")
+            pool.state = {
+                "schema_version": 5,
+                "status": "ready",
+                "last_analysis_at": int(now_ts),
+                "assessments": {
+                    v: {
+                        "status": "ready",
+                        "version": f"v-{v}",
+                        "risk_assessment": {"level": "low", "score": 15, "categories": [], "critical_reasons": []},
+                        "recommendation": {"action": "observe", "post_soak_action": "install", "reason": "Limpo."},
+                        "maturity": mat,
+                    }
+                    for v in ("nvidia", "amd", "intel", "windows")
+                },
+            }
+            pool._write_state(pool.state)
+            drivers_at_100h = {
+                v: {"version": f"v-{v}", "release_date": "2026-11-27", "first_seen_at": first_seen, "channel": "WHQL"}
+                for v in ("nvidia", "amd", "intel", "windows")
+            }
+            graduated = pool.public_state(drivers_at_100h, now_ts=now_ts + 100 * 3600)
+            self.assertEqual(graduated["assessments"]["nvidia"]["recommendation"]["action"], "install")
+            self.assertFalse(graduated["assessments"]["nvidia"]["maturity"]["in_quarantine"])
+
+    def test_advisor_accepts_root_vendor_keys_without_insights_wrapper(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pool = AIAdvisorPool(Path(tmp) / "advisor.json")
+            drivers = {v: {"version": f"1.{i}", "release_date": "2026-10-01"} for i, v in enumerate(("nvidia", "amd", "intel", "windows"))}
+            registry = {
+                f"{v}-technical-1": {"id": f"{v}-technical-1", "vendor": v, "kind": "technical", "publisher": v.upper(), "tier": "primary", "url": f"https://{v}.test", "title": "Notes"}
+                for v in ("nvidia", "amd", "intel", "windows")
+            }
+            raw_without_wrapper = {
+                v: {
+                    "headline": "Notas",
+                    "summary": "Resumo.",
+                    "summary_evidence_ids": [f"{v}-technical-1"],
+                    "risk_assessment": {"level": "low", "score": 10, "categories": [], "critical_reasons": []},
+                    "recommendation": {"action": "install", "reason": "OK", "evidence_ids": [f"{v}-technical-1"]},
+                }
+                for v in ("nvidia", "amd", "intel", "windows")
+            }
+            validated = pool._validate(raw_without_wrapper, drivers, registry)
+            self.assertEqual(set(validated), {"nvidia", "amd", "intel", "windows"})
+            self.assertEqual(validated["nvidia"]["recommendation"]["action"], "install")
+
+    def test_verdict_history_records_post_release_escalation_and_shared_snapshot_never_scrapes(self):
+        import asyncio
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "bot_state.json"
+            store = StateStore(state_path)
+            store.update({
+                "nvidia": {
+                    "version": "621.40", "release_date": "2026-11-24", "verified": True, "primary_verified": True,
+                    "source_name": "NVIDIA", "source_url": "https://nvidia.com/621.40", "official_url": "https://nvidia.com/621.40",
+                },
+                **{v: {"verified": False} for v in ("amd", "intel", "windows")},
+            }, collected_at=1000)
+            store.save_history_summary("nvidia", "621.40", {
+                "headline": "Lançamento inicial", "summary": "Sem relatos.", "risk_level": "low", "risk_score": 15,
+                "recommendation_action": "observe", "recommendation_reason": "Em observação.", "enriched_at": 1100,
+            })
+            updated = store.save_history_summary("nvidia", "621.40", {
+                "headline": "Telas pretas reportadas", "summary": "Falha grave.", "risk_level": "critical", "risk_score": 90,
+                "recommendation_action": "do_not_install", "recommendation_reason": "Telas pretas.", "enriched_at": 2200,
+            })
+            vh = updated["history"]["nvidia"][0]["verdict_history"]
+            self.assertEqual(len(vh), 2)
+            self.assertEqual(vh[0]["action"], "observe")
+            self.assertEqual(vh[1]["action"], "do_not_install")
+            from service import _latest_verdict_change
+            change = _latest_verdict_change(vh)
+            self.assertTrue(change["escalated"])
+            self.assertEqual(change["from_action"], "observe")
+            self.assertEqual(change["to_action"], "do_not_install")
+
+            # Shared snapshot mode (driveradar_api) must serve expired snapshot without triggering live scrape
+            snap_path = Path(tmp) / "snapshot.json"
+            snap_path.write_text(json.dumps({
+                "schema_version": 4,
+                "status": "success",
+                "last_updated": 500,
+                "collection": {"collected_at": 500},
+                "drivers": {},
+                "history": {},
+                "security_alerts": [],
+                "advisor": {"status": "ready", "assessments": {}},
+            }), encoding="utf-8")
+
+            class ExplodingMonitor:
+                def get_release(self, _vendor):
+                    raise AssertionError("Shared snapshot API must not trigger live scrape!")
+
+            shared_svc = DriveRadarService(state_path=state_path, cache_ttl=60, monitor=ExplodingMonitor(), use_shared_snapshot=True)
+            data = asyncio.run(shared_svc.get_data())
+            self.assertEqual(data["status"], "success")
+            self.assertGreater(data["cache_age_seconds"], 60)
+
+    def test_i18n_four_language_key_parity_web_and_desktop(self):
+        import subprocess
+        root = Path(__file__).parents[1]
+        node_check = r"""
+        const fs = require('fs');
+        const vm = require('vm');
+        const desktop = require('./desktop/src/i18n.js');
+        const webSrc = fs.readFileSync('./static/js/i18n.js', 'utf8');
+        const m = webSrc.match(/const DICT = (\{[\s\S]*?\n  \});/);
+        if (!m) throw new Error('Web DICT not found');
+        const webDict = vm.runInNewContext('(' + m[1] + ')');
+        const deskSrc = fs.readFileSync('./desktop/src/i18n.js', 'utf8');
+        const m2 = deskSrc.match(/const DICT = (\{[\s\S]*?\n  \});/);
+        if (!m2) throw new Error('Desktop DICT not found');
+        const deskDict = vm.runInNewContext('(' + m2[1] + ')');
+        for (const [name, dict] of [['web', webDict], ['desktop', deskDict]]) {
+          const base = Object.keys(dict['pt-BR']).sort();
+          for (const lang of ['en', 'es', 'fr']) {
+            const cur = Object.keys(dict[lang]).sort();
+            const missing = base.filter(k => !cur.includes(k));
+            const extra = cur.filter(k => !base.includes(k));
+            if (missing.length || extra.length) {
+              throw new Error(`${name} ${lang} mismatch: missing=${missing} extra=${extra}`);
+            }
+            for (const k of cur) {
+              if (!String(dict[lang][k]).trim()) throw new Error(`${name} ${lang}.${k} empty`);
+            }
+          }
+        }
+        console.log('PARITY_OK', Object.keys(webDict['pt-BR']).length, Object.keys(deskDict['pt-BR']).length);
+        """
+        proc = subprocess.run(["node", "-e", node_check], cwd=root, capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+        self.assertIn("PARITY_OK", proc.stdout)
+
+    def test_fastapi_endpoints_localization_and_csp_headers(self):
+        from fastapi.testclient import TestClient
+        import app as web_app
+        from service import localize_history_entry
+
+        sample_entry = {
+            "version": "621.40",
+            "release_summary": {
+                "headline": "Título PT",
+                "summary": "Resumo PT",
+                "recommendation_reason": "Motivo PT",
+                "translations": {
+                    "fr": {"headline": "Titre FR", "summary": "Résumé FR", "recommendation_reason": "Raison FR"}
+                },
+            },
+        }
+        projected = localize_history_entry(sample_entry, "fr")
+        self.assertEqual(projected["release_summary"]["headline"], "Titre FR")
+        self.assertEqual(sample_entry["release_summary"]["headline"], "Título PT")
+
+        client = TestClient(web_app.app, raise_server_exceptions=True)
+        for route in ("/driveradar/", "/driveradar/privacidade", "/driveradar/termos", "/driveradar/health", "/driveradar/service-worker.js"):
+            resp = client.get(route)
+            self.assertEqual(resp.status_code, 200, msg=route)
+            self.assertIn("Content-Security-Policy", resp.headers)
+            self.assertEqual(resp.headers["X-Frame-Options"], "DENY")
+
+    def test_sourcehub_304_not_modified_reuses_http_cache(self):
+        from unittest.mock import patch
+        hub = SourceHub(refresh_ttl=0)
+        src = Source("tpu-test", "TechPowerUp News", "TechPowerUp", "https://tpu.test/rss", "specialist", 0.8)
+        rss_bytes = (
+            b"<rss><channel><item><title>NVIDIA GeForce 621.40 WHQL driver released</title>"
+            b"<description>Official release</description><link>https://tpu.test/1</link></item></channel></rss>"
+        )
+
+        class StreamResp:
+            def __init__(self, code, body=b"", headers=None):
+                self.status_code = code
+                self._body = body
+                self.headers = headers or {}
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise RuntimeError(self.status_code)
+
+            def iter_content(self, _chunk):
+                yield self._body
+
+            def close(self):
+                pass
+
+        seen_headers = []
+
+        def fake_get(_url, headers=None, **_kwargs):
+            seen_headers.append(dict(headers or {}))
+            if len(seen_headers) == 1:
+                return StreamResp(200, rss_bytes, {"ETag": '"v1-tag"'})
+            return StreamResp(304, b"", {"ETag": '"v1-tag"'})
+
+        with patch("sources.requests.get", side_effect=fake_get):
+            first = hub._fetch(src, {"nvidia": "621.40"})
+            second = hub._fetch(src, {"nvidia": "621.40"})
+        self.assertEqual(first["status"], "reachable")
+        self.assertIn("621.40", first["matched_versions"])
+        self.assertEqual(seen_headers[1].get("If-None-Match"), '"v1-tag"')
+        self.assertEqual(second["http_status"], 304)
+        self.assertIn("621.40", second["matched_versions"])
+
+    def test_monitor_probe_file_size_head_content_length_fallback(self):
+        class HeadSession(FakeSession):
+            def head(self, url, **_kwargs):
+                resp = FakeResponse("", status_code=200, url=url)
+                resp.headers = {"Content-Length": str(850 * 1024 * 1024)}
+                return resp
+
+        monitor = UpdateMonitor(HeadSession({}))
+        self.assertEqual(monitor._probe_file_size("https://downloadmirror.intel.com/12345/gfx_win_101.9175.exe"), "850 MB")
+        self.assertIsNone(monitor._probe_file_size("https://www.intel.com/content/www/us/en/download.html"))
+
+    def test_nvidia_hotfix_pending_escalates_risk_category(self):
+        res = evaluate_risk_policy(
+            {
+                "risk_assessment": {"level": "moderate", "score": 45, "categories": [], "critical_reasons": []},
+                "recommendation": {"action": "wait", "reason": "Hotfix disponível."},
+            },
+            driver_info={"channel": "WHQL", "hotfix_available": {"version": "621.45", "channel": "Hotfix"}},
+        )
+        self.assertIn("hotfix_pending", res["risk_assessment"]["categories"])
+
+    def test_versionless_regression_pass2_avoids_older_version_contamination(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "bot_state.json"
+
+            class StubMonitor:
+                def get_release(self, vendor):
+                    ver = {"nvidia": "621.40", "amd": "26.11.2", "intel": "32.0.101.9175", "windows": "KB5132057"}[vendor]
+                    return {
+                        "version": ver,
+                        "release_date": "2026-11-24",
+                        "channel": "WHQL",
+                        "source_url": f"https://{vendor}.test",
+                        "source_name": vendor.upper(),
+                        "official_url": f"https://{vendor}.test/dl",
+                        "release_notes_url": f"https://{vendor}.test/rn",
+                        "verified": True,
+                        "primary_verified": True,
+                        "evidence": [{"version": ver, "publisher": vendor.upper(), "tier": "primary", "weight": 1.0, "url": f"https://{vendor}.test"}],
+                        "release_notes": {"url": f"https://{vendor}.test/rn", "text": "Official notes", "structured": {}},
+                        "recent_releases": [],
+                    }
+
+            class StubHub:
+                def audit(self, _targets, ignored_siblings=None):
+                    return {
+                        "audited_at": 1_795_788_000,
+                        "configured_sources": 61,
+                        "reachable_sources": 60,
+                        "independent_publishers": 45,
+                        "corroboration": {},
+                        "alerts": [],
+                        "sources": [],
+                        "knowledge_documents": [
+                            {
+                                "title": "Latest NVIDIA GeForce Game Ready driver causes black screens on RTX GPUs",
+                                "summary": "Users report signal loss after updating.",
+                                "url": "https://tpu.test/versionless-black-screen",
+                                "publisher": "TechPowerUp",
+                                "tier": "specialist",
+                                "weight": 0.8,
+                                "published_at": "2026-11-26T20:00:00+00:00",
+                            },
+                            {
+                                "title": "Old NVIDIA GeForce 621.14 driver had minor crash bug",
+                                "summary": "Older driver issue.",
+                                "url": "https://tpu.test/old-621-14-bug",
+                                "publisher": "TechPowerUp",
+                                "tier": "specialist",
+                                "weight": 0.8,
+                                "published_at": "2026-11-26T18:00:00+00:00",
+                            },
+                        ],
+                    }
+
+            svc = DriveRadarService(state_path=state_path, monitor=StubMonitor(), source_hub=StubHub())
+            svc._collect()
+            nv_urls = [doc["url"] for doc in svc._analysis_evidence["nvidia"]]
+            self.assertIn("https://tpu.test/versionless-black-screen", nv_urls)
+            self.assertNotIn("https://tpu.test/old-621-14-bug", nv_urls)
+
+    def test_desktop_v140_parity_escalation_and_api_guard_markers(self):
+        root = Path(__file__).parents[1]
+        pkg = json.loads((root / "desktop/package.json").read_text())
+        self.assertEqual(pkg["version"], "1.4.0")
+        main_js = (root / "desktop/src/main.js").read_text()
+        preload_js = (root / "desktop/src/preload.js").read_text()
+        renderer_js = (root / "desktop/src/renderer/renderer.js").read_text()
+        web_js = (root / "static/js/app.js").read_text()
+        for marker in ("settings:validateApi", "notifyEscalation", "notif.escalationTitle", "tray.tagObserve"):
+            self.assertIn(marker, main_js)
+        self.assertIn("validateApiEndpoint", preload_js)
+        for marker in ("verdict-change-banner", "soak-meter", "copy-hash-btn", "applyValidatedApiUrl", "signal-mini-grid"):
+            self.assertIn(marker, renderer_js)
+        for marker in ("SEEN_VERDICTS_KEY", "verdict-change-banner", "soak-meter", "notif.escalationTitle"):
+            self.assertIn(marker, web_js)
+        self.assertNotIn("publisher(s) ·", web_js)
 
 
 if __name__ == "__main__":

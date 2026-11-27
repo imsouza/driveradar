@@ -18,16 +18,19 @@ Cross-verified release tracker for **NVIDIA GeForce**, **AMD Radeon**, **Intel A
 - **-20 pts** if only persisted `stale` data is available
 - Capped at **98** (confidence scores confirm version and release date accuracy — never hardware-specific stability)
 
-## Precision 4-Tier Risk Evaluation Engine
+## Precision Risk Evaluation & 96-Hour Release Maturity Engine
 
-Each verified release runs through both AI evidence synthesis and deterministic policy guardrails (`advisor.py`) so critical defects are never masked as neutral advice:
+Each verified release runs through AI evidence synthesis, multi-source corroboration checks, and a deterministic **96-Hour Soak / Quarantine State Machine** (`advisor.py` + `service.py`) so premature Day-1 green badges and post-launch blind spots are eliminated:
 
-| Risk Level | Score | Enforced Recommendation | Triggers |
+| State / Risk Level | Score | Enforced Action | Triggers |
 | :--- | :--- | :--- | :--- |
-| **Critical** | `80–100` | **`do_not_install`** (Red alert badge) | Hardware damage (e.g., excessive SSD writes / overheating / bricking), filesystem or data corruption, boot loops / widespread BSOD, official vendor recall, or active unmitigated critical flaw |
-| **High** | `55–79` | `wait` | Widespread functional regressions or newer official hotfix pending |
+| **Critical** | `80–100` | **`do_not_install`** (Red alert badge) | Hardware damage (e.g., excessive SSD writes / overheating / bricking), filesystem or data corruption, boot loops, corroborated black screens / signal loss (`>= 2` independent publishers or vendor note), official recall, or active unmitigated critical flaw |
+| **High** | `55–79` | `wait` | Widespread functional regressions, single-source severe regression reports under investigation, or newer official hotfix pending |
 | **Moderate** | `25–54` | `wait` / `install` | Localized known issues (1–2 specific games/apps) or optional/Preview builds without critical risk |
-| **Low** | `0–24` | `install` | Clean WHQL/GA release, including security patches that **fix** CVEs without introducing regressions (anti-false-positive rule) |
+| **Observing (Soak)** | `0–24` | **`observe`** (Blue soak badge) | Clean release `< 96h` (`4 days`) old soaking for post-launch field telemetry before `install` is unlocked (urgent `Patch Tuesday (B)` / `Out-of-Band` security fixes bypass quarantine when clean) |
+| **Low (Mature)** | `0–24` | `install` | Mature (`>= 96h`) clean WHQL/GA release, or urgent security patch fixing CVEs with zero regressions |
+
+- **Verdict Transition History & Escalation Alerts**: Every status transition (`observe → do_not_install`, `install → do_not_install`, `observe → install`) is persisted in `verdict_history`. If a previously seen version escalates to `Critical` or `High` days after launch, both the Web dashboard and Windows Desktop app surface a post-release warning banner and fire an urgent notification.
 
 ## AI Provider Pool & Failover
 

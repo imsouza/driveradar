@@ -87,7 +87,7 @@ function resolveRisk(obj) {
     ? Number(ra.score)
     : obj.risk_score !== undefined && obj.risk_score !== null
       ? Number(obj.risk_score)
-      : (rawLevel === 'critical' || rawAction === 'do_not_install' ? 90 : rawLevel === 'high' ? 65 : rawAction === 'install' ? 15 : 38);
+      : (rawLevel === 'critical' || rawAction === 'do_not_install' ? 90 : rawLevel === 'high' ? 65 : (rawAction === 'install' || rawAction === 'observe') ? 15 : 38);
   const criticalReasons = Array.isArray(ra?.critical_reasons) ? ra.critical_reasons : (Array.isArray(obj.critical_reasons) ? obj.critical_reasons : []);
   const isCritical = rawLevel === 'critical' || rawAction === 'do_not_install' || score >= 80;
   const level = isCritical ? 'critical' : ['high', 'moderate', 'low'].includes(rawLevel) ? rawLevel : (score >= 55 ? 'high' : score >= 25 ? 'moderate' : 'low');
@@ -104,7 +104,7 @@ function localizeAssessment(assessment, lang) {
   if (!assessment || typeof assessment !== 'object') return assessment;
   const tblock = lang && lang !== 'pt-BR' ? assessment.translations?.[lang] : null;
   if (!tblock || typeof tblock !== 'object') return assessment;
-  return {
+  const out = {
     ...assessment,
     headline: tblock.headline || assessment.headline,
     summary: tblock.summary || assessment.summary,
@@ -124,6 +124,36 @@ function localizeAssessment(assessment, lang) {
         }
       : undefined
   };
+  ['highlights', 'positive_signals', 'risk_signals', 'watch_items'].forEach((group) => {
+    if (Array.isArray(out[group]) && Array.isArray(tblock[group])) {
+      out[group] = out[group].map((item, idx) => (tblock[group][idx] ? { ...item, text: tblock[group][idx] } : item));
+    }
+  });
+  return out;
+}
+
+function localizeBreakdownStep(step) {
+  const code = step?.code;
+  if (!code) return step?.label || '';
+  if (code === 'independent_publishers') {
+    const count = Number(step.count || 1);
+    return tr(count === 1 ? 'breakdown.independent_publishers' : 'breakdown.independent_publishersPlural', { count });
+  }
+  if (code === 'version_conflicts') {
+    const count = Number(step.count || 1);
+    return tr(count === 1 ? 'breakdown.version_conflicts' : 'breakdown.version_conflictsPlural', { count });
+  }
+  return tr(`breakdown.${code}`);
+}
+
+function localizeAction(action) {
+  const map = {
+    install: tr('action.install'),
+    observe: tr('action.observe'),
+    wait: tr('action.wait'),
+    do_not_install: tr('action.do_not_install')
+  };
+  return map[action] || tr('action.wait');
 }
 
 function localizeSummary(summary, lang) {
@@ -206,12 +236,6 @@ function renderDrivers(data) {
   const visibleVendors = Object.keys(LABELS).filter((v) => enabledVendors[v]);
   const listToRender = visibleVendors.length ? visibleVendors : Object.keys(LABELS);
 
-  const actionLabels = {
-    install: tr('action.install'),
-    wait: tr('action.wait'),
-    do_not_install: tr('action.do_not_install')
-  };
-
   const lang = activeLang();
   listToRender.forEach((vendor) => {
     const item = drivers[vendor] || {};
@@ -220,6 +244,7 @@ function renderDrivers(data) {
     const tone = scoreTone(score);
     const assess = localizeAssessment(assessments[vendor], lang);
     const riskInfo = resolveRisk(assess);
+    const maturity = assess?.maturity || item.maturity || {};
     const isCritical = assess?.status === 'ready' && (riskInfo.level === 'critical' || riskInfo.action === 'do_not_install');
     const card = node('article', `card${isCritical ? ' risk-critical' : ''}`);
 
@@ -243,9 +268,30 @@ function renderDrivers(data) {
     meter.append(fill);
     card.append(meter);
 
-    const ageDays = releaseAgeDays(item.release_date);
-    if (ageDays !== null && ageDays >= 0 && ageDays <= 2 && !isCritical) {
-      card.append(node('p', 'fresh-callout', tr('drivers.freshRelease')));
+    if (item.verdict_change && item.verdict_change.from_action && item.verdict_change.to_action) {
+      const vc = item.verdict_change;
+      const key = vc.escalated ? 'drivers.verdictEscalated' : 'drivers.verdictChanged';
+      card.append(node(
+        'div',
+        `verdict-change-banner${vc.escalated ? ' escalated' : ''}`,
+        tr(key, { from: localizeAction(vc.from_action), to: localizeAction(vc.to_action) })
+      ));
+    }
+
+    if (maturity.in_quarantine && !maturity.security_bypass && !isCritical && riskInfo.level !== 'high') {
+      const callout = node('div', 'fresh-callout');
+      const pct = Number(maturity.progress_pct || 25);
+      const remHours = Math.max(1, Math.round(Number(maturity.remaining_hours || 48)));
+      callout.append(
+        node('strong', '', tr('drivers.soakTitle', { day: maturity.soak_day || 1, total: maturity.window_days || 4, pct })),
+        node('span', '', tr('drivers.freshRelease', { hours: remHours }))
+      );
+      const bar = node('div', 'soak-meter');
+      const barFill = node('span');
+      barFill.style.width = `${pct}%`;
+      bar.append(barFill);
+      callout.append(bar);
+      card.append(callout);
     }
 
     const conflicts = ver.conflicts || [];
@@ -257,24 +303,31 @@ function renderDrivers(data) {
     }
 
     const rec = assess?.recommendation;
-    const action = isCritical ? 'do_not_install' : (rec?.action || 'wait');
+    const action = isCritical ? 'do_not_install' : (rec?.action || (maturity.in_quarantine ? 'observe' : 'wait'));
     const vBoxClass = isCritical ? 'verdict-box critical do_not_install' : `verdict-box ${action}${riskInfo.level === 'high' ? ' high' : ''}`;
     const vBox = node('div', vBoxClass);
     const vTop = node('div', 'verdict-top');
     vTop.append(node('small', '', tr('drivers.rec')));
     const vBadges = node('div', 'verdict-badges');
-    if (isCritical) vBadges.append(node('span', 'critical-badge', tr('action.criticalBadge')));
+    if (isCritical) {
+      vBadges.append(node('span', 'critical-badge', tr('action.criticalBadge')));
+    } else if (action === 'observe' && maturity.soak_day) {
+      vBadges.append(node('span', 'pill-blue', tr('action.observeDay', { day: maturity.soak_day, total: maturity.window_days || 4 })));
+    }
     if (assess?.risk_assessment?.level) {
       vBadges.append(node('span', `risk-pill risk-${riskInfo.level}`, tr('risk.scoreLabel', { level: tr(`risk.${riskInfo.level}`), score: riskInfo.score })));
     }
     vTop.append(vBadges);
     vBox.append(vTop);
-    vBox.append(node('strong', '', actionLabels[action] || tr('action.wait')));
+    vBox.append(node('strong', '', localizeAction(action)));
     vBox.append(node('p', '', rec?.reason || assess?.headline || tr('drivers.waitingReview')));
     if (isCritical && riskInfo.critical_reasons.length) {
       const crUl = node('ul', 'critical-reasons-list');
       riskInfo.critical_reasons.forEach((reason) => crUl.append(node('li', '', reason)));
       vBox.append(crUl);
+    }
+    if (rec?.target_audience) {
+      vBox.append(node('p', 'target-note', tr('drivers.target', { val: rec.target_audience })));
     }
     card.append(vBox);
 
@@ -282,6 +335,40 @@ function renderDrivers(data) {
       const details = node('details');
       details.append(node('summary', '', tr('drivers.summaryToggle', { count: (ver.agreements || []).length })));
       if (assess?.summary) details.append(node('p', '', assess.summary));
+
+      const signalGroups = [
+        [tr('drivers.highlights'), assess?.highlights || [], 'highlights'],
+        [tr('drivers.positives'), assess?.positive_signals || [], 'positives'],
+        [tr('drivers.risks'), assess?.risk_signals || [], 'risks'],
+        [tr('drivers.watch'), assess?.watch_items || [], 'watch']
+      ].filter(([, arr]) => arr.some((entry) => entry?.text));
+      if (signalGroups.length) {
+        const sGrid = node('div', 'signal-mini-grid');
+        signalGroups.forEach(([title, arr, cls]) => {
+          const box = node('div', `signal-mini-box ${cls}`);
+          box.append(node('small', '', title));
+          const ul = node('ul');
+          arr.forEach((entry) => {
+            if (entry?.text) ul.append(node('li', '', entry.text));
+          });
+          box.append(ul);
+          sGrid.append(box);
+        });
+        details.append(sGrid);
+      }
+
+      if ((ver.breakdown || []).length) {
+        const bList = node('ul', 'breakdown-list');
+        ver.breakdown.forEach((step) => {
+          const li = node('li');
+          li.append(node('span', '', localizeBreakdownStep(step)));
+          const sign = step.delta > 0 ? `+${step.delta}` : String(step.delta);
+          li.append(node('span', `breakdown-delta ${step.kind || 'neutral'}`, `${sign} pts`));
+          bList.append(li);
+        });
+        details.append(bList);
+      }
+
       const chips = node('div', 'chips');
       (ver.agreements || []).forEach((ag) => {
         const label = ag.publisher || ag.source_name || 'Source';
@@ -320,11 +407,13 @@ function renderDrivers(data) {
           channel: item.channel,
           os_build: item.os_build,
           file_size: item.file_size,
+          sha256: item.sha256,
           source_name: item.source_name,
           official_url: item.official_url,
           release_notes_url: item.release_notes_url,
           primary_verified: ver.primary_confirmed,
-          verification: ver
+          verification: ver,
+          verdict_history: item.verdict_history
         };
         openHistoryDialog(vendor, hist, 0);
       });
@@ -415,12 +504,6 @@ function populateDialog(vendor, item, isLoading) {
     body.append(node('p', '', tr('dialog.loading')));
   }
 
-  const actionLabels = {
-    install: tr('action.install'),
-    wait: tr('action.wait'),
-    do_not_install: tr('action.do_not_install')
-  };
-
   const rs = localizeSummary(item.release_summary, lang);
   if (rs) {
     const riskInfo = resolveRisk(rs);
@@ -436,7 +519,7 @@ function populateDialog(vendor, item, isLoading) {
     }
     vTop.append(badges);
     vBox.append(vTop);
-    vBox.append(node('strong', '', actionLabels[act] || tr('action.wait')));
+    vBox.append(node('strong', '', localizeAction(act)));
     vBox.append(node('p', '', rs.recommendation_reason || ''));
     if (isCritical && riskInfo.critical_reasons.length) {
       const crUl = node('ul', 'critical-reasons-list');
@@ -463,6 +546,40 @@ function populateDialog(vendor, item, isLoading) {
     });
   }
 
+  const verSnap = item.verification || (item.version === currentData?.drivers?.[vendor]?.version ? currentData?.drivers?.[vendor]?.verification : null);
+  if (verSnap && (verSnap.breakdown || []).length) {
+    const crossSec = node('div', 'dialog-section');
+    crossSec.append(node('h3', '', tr('dialog.crossover')));
+    const bList = node('ul', 'breakdown-list');
+    verSnap.breakdown.forEach((step) => {
+      const li = node('li');
+      li.append(node('span', '', localizeBreakdownStep(step)));
+      const sign = step.delta > 0 ? `+${step.delta}` : String(step.delta);
+      li.append(node('span', `breakdown-delta ${step.kind || 'neutral'}`, `${sign} pts`));
+      bList.append(li);
+    });
+    crossSec.append(bList);
+    body.append(crossSec);
+  }
+
+  const vHist = item.verdict_history || (item.version === currentData?.drivers?.[vendor]?.version ? currentData?.drivers?.[vendor]?.verdict_history : null) || [];
+  if (vHist.length > 1) {
+    const vhSec = node('div', 'dialog-section');
+    vhSec.append(node('h3', '', tr('dialog.verdictHistory')));
+    const vhList = node('ul', 'breakdown-list');
+    vHist.forEach((step) => {
+      const li = node('li');
+      const rLabel = step.risk_level ? tr(`risk.${step.risk_level}`) : '';
+      li.append(
+        node('span', '', `${localizeAction(step.action)}${rLabel ? ` (${rLabel})` : ''}`),
+        node('span', '', formatDate(step.at, true))
+      );
+      vhList.append(li);
+    });
+    vhSec.append(vhList);
+    body.append(vhSec);
+  }
+
   const meta = node('div', 'dialog-section');
   meta.append(node('h3', '', tr('dialog.meta')));
   const dl = node('dl', 'dl-grid');
@@ -476,6 +593,22 @@ function populateDialog(vendor, item, isLoading) {
   ].forEach(([k, v]) => {
     dl.append(node('dt', '', k), node('dd', '', v));
   });
+  if (item.sha256) {
+    dl.append(node('dt', '', 'SHA-256'));
+    const shaDd = node('dd');
+    shaDd.append(document.createTextNode(`${item.sha256.slice(0, 18)}…`));
+    const copyBtn = node('button', 'copy-hash-btn', tr('dialog.copy'));
+    copyBtn.type = 'button';
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(item.sha256);
+        copyBtn.textContent = tr('dialog.copied');
+        setTimeout(() => { copyBtn.textContent = tr('dialog.copy'); }, 1500);
+      } catch (_) {}
+    });
+    shaDd.append(copyBtn);
+    dl.append(shaDd);
+  }
   meta.append(dl);
   body.append(meta);
 
@@ -643,6 +776,7 @@ function renderSettings() {
   ));
   gMon.append(makeToggleRow(tr('settings.skipBeta'), tr('settings.skipBetaDesc'), currentSettings.ignoreBetaPreview, (v) => updateSetting({ ignoreBetaPreview: v })));
   gMon.append(makeToggleRow(tr('settings.notifyConflicts'), tr('settings.notifyConflictsDesc'), currentSettings.notifyConflicts, (v) => updateSetting({ notifyConflicts: v })));
+  gMon.append(makeToggleRow(tr('settings.notifyEscalation'), tr('settings.notifyEscalationDesc'), currentSettings.notifyEscalation !== false, (v) => updateSetting({ notifyEscalation: v })));
   root.append(gMon);
 
   const gNotif = node('section', 'settings-group');
@@ -745,13 +879,37 @@ function renderSettings() {
   adv.append(node('summary', '', tr('settings.advApi')));
   const urlRow = node('div', 'setting-row');
   const uLbl = node('label');
-  uLbl.append(node('strong', '', tr('settings.apiBase')), node('small', '', tr('settings.apiBaseDesc')));
+  const feedback = node('small', 'api-feedback', '');
+  uLbl.append(node('strong', '', tr('settings.apiBase')), node('small', '', tr('settings.apiBaseDesc')), feedback);
+  const urlControls = node('div', 'api-url-controls');
   const urlInput = node('input');
   urlInput.type = 'url';
-  urlInput.style.width = '280px';
+  urlInput.style.width = '250px';
   urlInput.value = currentSettings.apiBaseUrl;
-  urlInput.addEventListener('change', () => updateSetting({ apiBaseUrl: urlInput.value }));
-  urlRow.append(uLbl, urlInput);
+  const resetBtn = node('button', 'btn-outline', tr('settings.apiReset'));
+  resetBtn.type = 'button';
+  const defaultApiUrl = currentAppInfo?.defaultApiUrl || 'https://optlabs.com.br/driveradar';
+
+  async function applyValidatedApiUrl(candidate) {
+    feedback.className = 'api-feedback';
+    feedback.textContent = tr('settings.apiValidating');
+    const res = await window.driveRadar.validateApiEndpoint(candidate);
+    if (!res?.ok) {
+      feedback.className = 'api-feedback error';
+      feedback.textContent = res?.error || tr('settings.apiInvalid');
+      urlInput.value = currentSettings.apiBaseUrl;
+      return;
+    }
+    urlInput.value = res.url;
+    feedback.className = 'api-feedback ok';
+    feedback.textContent = tr('settings.apiValid');
+    await updateSetting({ apiBaseUrl: res.url });
+  }
+
+  urlInput.addEventListener('change', () => applyValidatedApiUrl(urlInput.value));
+  resetBtn.addEventListener('click', () => applyValidatedApiUrl(defaultApiUrl));
+  urlControls.append(urlInput, resetBtn);
+  urlRow.append(uLbl, urlControls);
   adv.append(urlRow);
   gApp.append(adv);
   root.append(gApp);
@@ -789,6 +947,7 @@ function renderAbout() {
     ['critical', tr('about.riskCritical')],
     ['stale', tr('about.riskHigh')],
     ['independent', tr('about.riskModerate')],
+    ['independent', tr('about.riskObserve')],
     ['primary', tr('about.riskLow')]
   ].forEach(([tone, text]) => {
     const li = node('li');

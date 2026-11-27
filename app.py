@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from service import SUPPORTED_LANGS, VENDORS, DriveRadarService, localize_payload
+from service import SUPPORTED_LANGS, VENDORS, DriveRadarService, localize_history_entry, localize_payload
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 service = DriveRadarService()
@@ -78,7 +78,7 @@ async def get_history_entry(vendor: str, version: str, response: Response, lang:
     if not entry:
         raise HTTPException(status_code=404, detail="History version not found")
     response.headers["Cache-Control"] = "public, max-age=300"
-    return entry
+    return localize_history_entry(entry, clean_lang)
 
 
 @web.get("/health")

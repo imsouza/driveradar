@@ -31,6 +31,7 @@ const DEFAULT_SETTINGS = {
   pollIntervalMinutes: 60,
   ignoreBetaPreview: false,
   notifyConflicts: true,
+  notifyEscalation: true,
   notificationsEnabled: true,
   notificationSound: true,
   securitySeverity: 'high',
@@ -56,7 +57,7 @@ let pollTimer = null;
 let updateTimer = null;
 
 let settings = { ...DEFAULT_SETTINGS, vendors: { ...DEFAULT_SETTINGS.vendors } };
-let seenState = { seeded: false, versions: {}, conflicts: {}, alerts: [] };
+let seenState = { seeded: false, versions: {}, verdicts: {}, conflicts: {}, alerts: [] };
 let cachedData = null;
 let updaterStatus = { state: 'idle', version: app.getVersion(), message: '' };
 
@@ -116,6 +117,7 @@ function mergeSettings(raw) {
     pollIntervalMinutes: Number.isFinite(poll) ? Math.min(1440, Math.max(5, Math.round(poll))) : settings.pollIntervalMinutes,
     ignoreBetaPreview: typeof input.ignoreBetaPreview === 'boolean' ? input.ignoreBetaPreview : settings.ignoreBetaPreview,
     notifyConflicts: typeof input.notifyConflicts === 'boolean' ? input.notifyConflicts : settings.notifyConflicts,
+    notifyEscalation: typeof input.notifyEscalation === 'boolean' ? input.notifyEscalation : settings.notifyEscalation,
     notificationsEnabled: typeof input.notificationsEnabled === 'boolean' ? input.notificationsEnabled : settings.notificationsEnabled,
     notificationSound: typeof input.notificationSound === 'boolean' ? input.notificationSound : settings.notificationSound,
     securitySeverity: ['off', 'critical', 'high', 'all'].includes(input.securitySeverity) ? input.securitySeverity : settings.securitySeverity,
@@ -193,13 +195,29 @@ function refreshTray() {
   tray.setImage(nativeImage.createFromPath(assetPath(iconFile)));
 
   const drivers = cachedData?.drivers || {};
+  const assessments = cachedData?.advisor?.assessments || {};
+  let critCount = 0;
   const versionItems = VENDORS.filter((v) => settings.vendors[v]).map((v) => {
     const d = drivers[v];
+    const assess = assessments[v];
+    const act = assess?.recommendation?.action;
+    const lvl = assess?.risk_assessment?.level;
+    const isCrit = assess?.status === 'ready' && (lvl === 'critical' || act === 'do_not_install');
+    if (isCrit) critCount += 1;
+    const suffix = isCrit
+      ? ` [${msg('action.criticalBadge')}]`
+      : (assess?.status === 'ready' && act === 'observe')
+        ? ` [${msg('tray.tagObserve')}]`
+        : '';
     return {
-      label: `${VENDOR_LABELS[v]}: ${d?.version || '—'}`,
+      label: `${VENDOR_LABELS[v]}: ${d?.version || '—'}${suffix}`,
       click: () => showWindow('drivers')
     };
   });
+
+  const tipParts = [`DriveRadar v${app.getVersion()}`];
+  if (critCount > 0) tipParts.push(`${critCount} ${msg('action.criticalBadge')}`);
+  tray.setToolTip(tipParts.join(' · '));
 
   const menu = Menu.buildFromTemplate([
     { label: `DriveRadar v${app.getVersion()}`, enabled: false },
@@ -263,14 +281,33 @@ function alertKey(alert) {
   return [alert.title || '', alert.link || '', alert.published_at || ''].join('|');
 }
 
+function extractVerdicts(data) {
+  const out = {};
+  const drivers = data?.drivers || {};
+  const assessments = data?.advisor?.assessments || {};
+  for (const v of VENDORS) {
+    const ver = drivers[v]?.version;
+    const assess = assessments[v];
+    if (!ver || assess?.status !== 'ready') continue;
+    const act = assess?.recommendation?.action || 'wait';
+    const lvl = (act === 'do_not_install' || assess?.risk_assessment?.level === 'critical')
+      ? 'critical'
+      : (assess?.risk_assessment?.level || 'moderate');
+    out[v] = { version: ver, action: act, level: lvl };
+  }
+  return out;
+}
+
 function processNotifications(data) {
   const drivers = data?.drivers || {};
   const alerts = data?.security_alerts || [];
+  const liveVerdicts = extractVerdicts(data);
 
   if (!seenState.seeded) {
     seenState = {
       seeded: true,
       versions: Object.fromEntries(VENDORS.map((v) => [v, drivers[v]?.version || null])),
+      verdicts: liveVerdicts,
       conflicts: Object.fromEntries(
         VENDORS.map((v) => [v, (drivers[v]?.verification?.conflicts || []).map((c) => `${c.publisher}:${c.version}`)])
       ),
@@ -282,27 +319,34 @@ function processNotifications(data) {
 
   const canNotify = settings.notificationsEnabled && !isQuietHoursNow();
   const nextVersions = { ...seenState.versions };
+  const nextVerdicts = { ...(seenState.verdicts || {}), ...liveVerdicts };
   const nextConflicts = { ...seenState.conflicts };
+  const riskRank = { low: 0, moderate: 1, high: 2, critical: 3 };
 
   for (const v of VENDORS) {
     const item = drivers[v];
     const ver = item?.version || null;
     const prev = seenState.versions[v];
+    const prevVerdict = (seenState.verdicts || {})[v];
+    const curVerdict = liveVerdicts[v];
+    const lang = curLang();
+    const assess = data?.advisor?.assessments?.[v];
+    const tblock = lang !== 'pt-BR' ? assess?.translations?.[lang] : null;
+    const recReason = tblock?.reason || assess?.recommendation?.reason || '';
+
     if (ver && ver !== prev) {
       nextVersions[v] = ver;
       const skipPreview = settings.ignoreBetaPreview && isPreviewOrBeta(item.channel);
       if (canNotify && settings.vendors[v] && prev && !skipPreview) {
-        const lang = curLang();
-        const assess = data?.advisor?.assessments?.[v];
-        const tblock = lang !== 'pt-BR' ? assess?.translations?.[lang] : null;
         const rec = assess?.recommendation?.action;
         const isCritical = rec === 'do_not_install' || assess?.risk_assessment?.level === 'critical';
-        const recReason = tblock?.reason || assess?.recommendation?.reason || '';
         const recText = isCritical
           ? msg('notif.recCritical', { reason: recReason })
           : rec === 'install'
             ? msg('notif.recInstall')
-            : msg('notif.recWait');
+            : rec === 'observe'
+              ? msg('notif.recObserve')
+              : msg('notif.recWait');
         const body = `${item.channel ? `${item.channel} · ` : ''}${recText}${isCritical ? '' : ` ${msg('notif.recFreshTip')}`}`;
         fireNotification(
           msg('notif.newVerTitle', { vendor: VENDOR_LABELS[v], version: ver }),
@@ -310,6 +354,23 @@ function processNotifications(data) {
           () => showWindow('drivers')
         );
       }
+    } else if (
+      ver &&
+      canNotify &&
+      settings.notifyEscalation &&
+      settings.vendors[v] &&
+      curVerdict &&
+      prevVerdict &&
+      prevVerdict.version === ver &&
+      (curVerdict.level === 'critical' || curVerdict.level === 'high') &&
+      (riskRank[curVerdict.level] || 0) > (riskRank[prevVerdict.level] || 0)
+    ) {
+      const actLabel = msg(`action.${curVerdict.action}`);
+      fireNotification(
+        msg('notif.escalationTitle', { vendor: VENDOR_LABELS[v], version: ver }),
+        msg('notif.escalationBody', { action: actLabel, reason: recReason }),
+        () => showWindow('drivers')
+      );
     }
 
     const currentConfs = (item?.verification?.conflicts || []).map((c) => `${c.publisher}:${c.version}`);
@@ -340,7 +401,7 @@ function processNotifications(data) {
     }
   }
 
-  seenState = { seeded: true, versions: nextVersions, conflicts: nextConflicts, alerts: nextAlerts };
+  seenState = { seeded: true, versions: nextVersions, verdicts: nextVerdicts, conflicts: nextConflicts, alerts: nextAlerts };
   writeJsonAtomic(userFile('state.json'), seenState);
 }
 
@@ -538,12 +599,43 @@ function registerIpc() {
     }
     return settings;
   });
+  ipcMain.handle('settings:validateApi', async (_event, rawCandidate) => {
+    const trimmed = String(rawCandidate || '').trim();
+    if (!trimmed) {
+      return { ok: true, url: DEFAULT_API_BASE };
+    }
+    let parsed;
+    try {
+      parsed = new URL(trimmed);
+      if (!['http:', 'https:'].includes(parsed.protocol)) {
+        return { ok: false, error: msg('settings.apiInvalid') };
+      }
+    } catch (_) {
+      return { ok: false, error: msg('settings.apiInvalid') };
+    }
+    const cleanUrl = parsed.href.replace(/\/+$/, '');
+    try {
+      const resp = await net.fetch(`${cleanUrl}/health`, {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(7_000)
+      });
+      if (!resp.ok) return { ok: false, error: `${msg('settings.apiInvalid')} (HTTP ${resp.status})` };
+      const body = await resp.json();
+      if (body?.status === 'ok' && (body?.service === 'driveradar' || body?.service === 'driveradar-api')) {
+        return { ok: true, url: cleanUrl };
+      }
+      return { ok: false, error: msg('settings.apiInvalid') };
+    } catch (_) {
+      return { ok: false, error: msg('settings.apiInvalid') };
+    }
+  });
   ipcMain.handle('notify:test', () => {
     fireNotification(msg('notif.testTitle'), msg('notif.testBody'), () => showWindow('settings'));
     return true;
   });
   ipcMain.handle('app:info', () => ({
     version: app.getVersion(),
+    defaultApiUrl: DEFAULT_API_BASE,
     packaged: app.isPackaged,
     platform: process.platform,
     systemLocale: app.getLocale(),

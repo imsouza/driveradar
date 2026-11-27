@@ -9,7 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 
-from service import SUPPORTED_LANGS, VENDORS, DriveRadarService, localize_payload
+from service import SUPPORTED_LANGS, VENDORS, DriveRadarService, localize_history_entry, localize_payload
 
 app = FastAPI(title="DriveRadar API", version="3.0.0", docs_url=None, redoc_url=None)
 service = DriveRadarService(use_shared_snapshot=True)
@@ -58,4 +58,4 @@ async def get_history_entry(vendor: str, version: str, lang: str = "pt-BR", _: s
     entry = await service.enrich_history_entry(clean_vendor, version.strip(), lang=clean_lang)
     if not entry:
         raise HTTPException(status_code=404, detail="History version not found")
-    return entry
+    return localize_history_entry(entry, clean_lang)

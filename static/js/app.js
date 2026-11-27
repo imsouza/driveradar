@@ -15,6 +15,7 @@ const SHORT_LABELS = {
 const $ = (selector) => document.querySelector(selector);
 const SEEN_ALERTS_KEY = 'driveradar-seen-alerts-v1';
 const SEEN_VERSIONS_KEY = 'driveradar-seen-versions-v1';
+const SEEN_VERDICTS_KEY = 'driveradar-seen-verdicts-v1';
 const ALERT_PREFS_KEY = 'driveradar-alert-preferences-v1';
 const ALERT_CATEGORIES = ['nvidia', 'amd', 'intel', 'windows', 'vulnerabilities'];
 
@@ -81,7 +82,7 @@ function resolveRisk(obj) {
     ? Number(ra.score)
     : obj.risk_score !== undefined && obj.risk_score !== null
       ? Number(obj.risk_score)
-      : (rawLevel === 'critical' || rawAction === 'do_not_install' ? 90 : rawLevel === 'high' ? 65 : rawAction === 'install' ? 15 : 38);
+      : (rawLevel === 'critical' || rawAction === 'do_not_install' ? 90 : rawLevel === 'high' ? 65 : (rawAction === 'install' || rawAction === 'observe') ? 15 : 38);
   const categories = Array.isArray(ra?.categories) ? ra.categories : (Array.isArray(obj.risk_categories) ? obj.risk_categories : []);
   const criticalReasons = Array.isArray(ra?.critical_reasons) ? ra.critical_reasons : (Array.isArray(obj.critical_reasons) ? obj.critical_reasons : []);
   const isCritical = rawLevel === 'critical' || rawAction === 'do_not_install' || score >= 80;
@@ -316,33 +317,39 @@ function renderStructuredFallbackSignals(structured) {
   return details;
 }
 
-function renderTechnicalReview(rawAssessment, advisorStatus = 'pending', structuredNotes = null) {
+function localizeActionLabel(action) {
+  const map = {
+    install: tr('action.install', null, 'Instalar'),
+    observe: tr('action.observe', null, 'Em Observação'),
+    wait: tr('action.wait', null, 'Aguardar'),
+    do_not_install: tr('action.do_not_install', null, 'Crítico — Não instalar')
+  };
+  return map[action] || tr('action.wait', null, 'Aguardar');
+}
+
+function renderTechnicalReview(rawAssessment, advisorStatus = 'pending', structuredNotes = null, driverMaturity = null) {
   const assessment = localizeAssessment(rawAssessment, I18N.getLang());
   const ready = assessment?.status === 'ready';
   const processing = advisorStatus === 'pending';
   const risks = assessment?.risk_signals || [];
   const positives = assessment?.positive_signals || [];
+  const maturity = assessment?.maturity || driverMaturity || {};
   const recommendation = assessment?.recommendation || (ready && risks.length ? {
     action: 'wait',
     reason: tr('review.waitDefault'),
     citations: risks.flatMap((item) => item.citations || []).slice(0, 3)
   } : ready && positives.length ? {
-    action: 'install',
+    action: maturity.in_quarantine ? 'observe' : 'install',
     reason: '',
     citations: positives.flatMap((item) => item.citations || []).slice(0, 3)
   } : {
-    action: 'wait',
+    action: maturity.in_quarantine ? 'observe' : 'wait',
     reason: processing ? tr('review.waitDefault') : tr('review.waitUnavailable')
   });
 
   const riskInfo = resolveRisk({ ...assessment, recommendation });
   const action = ready ? riskInfo.action : recommendation.action || 'wait';
   const isCritical = ready && (riskInfo.level === 'critical' || action === 'do_not_install');
-  const actionLabels = {
-    install: tr('action.install', null, 'Instalar'),
-    wait: tr('action.wait', null, 'Aguardar'),
-    do_not_install: tr('action.do_not_install', null, 'Crítico — Não instalar')
-  };
   const block = node('section', `technical-note ${ready ? 'ready' : 'pending'}`);
   const verdictClass = isCritical ? 'verdict critical do_not_install' : `verdict ${action}${riskInfo.level === 'high' ? ' high' : ''}`;
   const verdict = node('div', verdictClass);
@@ -351,6 +358,8 @@ function renderTechnicalReview(rawAssessment, advisorStatus = 'pending', structu
   const badges = node('div', 'verdict-badges');
   if (isCritical) {
     badges.append(node('span', 'critical-badge', tr('action.criticalBadge', null, 'CRÍTICO')));
+  } else if (action === 'observe' && maturity.soak_day) {
+    badges.append(node('span', 'pill blue', tr('action.observeDay', { day: maturity.soak_day, total: maturity.window_days || 4 })));
   }
   if (ready && assessment?.risk_assessment?.level) {
     const levelLabel = tr(`risk.${riskInfo.level}`, null, riskInfo.level);
@@ -361,7 +370,7 @@ function renderTechnicalReview(rawAssessment, advisorStatus = 'pending', structu
   }
   verdictTop.append(badges);
   verdict.append(verdictTop);
-  verdict.append(node('strong', '', actionLabels[action] || tr('action.wait', null, 'Aguardar')));
+  verdict.append(node('strong', '', localizeActionLabel(action)));
   verdict.append(node('p', '', recommendation.reason));
   if (isCritical && riskInfo.critical_reasons.length) {
     const crList = node('ul', 'critical-reasons-list');
@@ -486,13 +495,39 @@ function renderDriver(vendor, data, assessment, advisorStatus) {
   meter.append(fill);
   card.append(meter);
 
-  const ageDays = releaseAgeDays(data.release_date);
-  if (ageDays !== null && ageDays >= 0 && ageDays <= 2 && !(assessment?.status === 'ready' && riskInfo.level === 'critical')) {
-    card.append(node('p', 'fresh-callout', tr('card.freshRelease')));
+  const maturity = assessment?.maturity || data.maturity || {};
+  const isCritCard = assessment?.status === 'ready' && (riskInfo.level === 'critical' || riskInfo.action === 'do_not_install');
+  if (data.verdict_change && data.verdict_change.from_action && data.verdict_change.to_action) {
+    const vc = data.verdict_change;
+    const bannerKey = vc.escalated ? 'card.verdictEscalated' : 'card.verdictChanged';
+    const banner = node(
+      'div',
+      `verdict-change-banner${vc.escalated ? ' escalated' : ''}`,
+      tr(bannerKey, {
+        from: localizeActionLabel(vc.from_action),
+        to: localizeActionLabel(vc.to_action)
+      })
+    );
+    card.append(banner);
+  }
+  if (maturity.in_quarantine && !maturity.security_bypass && !isCritCard && riskInfo.level !== 'high') {
+    const callout = node('div', 'fresh-callout');
+    const pct = Number(maturity.progress_pct || 25);
+    const remHours = Math.max(1, Math.round(Number(maturity.remaining_hours || 48)));
+    callout.append(
+      node('strong', '', tr('card.soakTitle', { day: maturity.soak_day || 1, total: maturity.window_days || 4, pct })),
+      node('span', '', tr('card.freshRelease', { hours: remHours }))
+    );
+    const bar = node('div', 'soak-meter');
+    const barFill = node('span');
+    barFill.style.width = `${pct}%`;
+    bar.append(barFill);
+    callout.append(bar);
+    card.append(callout);
   }
 
   card.append(renderCrossover(data));
-  card.append(renderTechnicalReview(assessment, advisorStatus, data.structured_notes));
+  card.append(renderTechnicalReview(assessment, advisorStatus, data.structured_notes, data.maturity));
 
   const facts = node('dl', 'facts');
   const factRows = [
@@ -617,11 +652,6 @@ function renderHistorySummarySections(rawSummary, fallbackVerification) {
   const fragment = document.createDocumentFragment();
   if (summary) {
     const recSec = node('div', 'dialog-section');
-    const actionLabels = {
-      install: tr('action.install'),
-      wait: tr('action.wait'),
-      do_not_install: tr('action.do_not_install')
-    };
     const riskInfo = resolveRisk(summary);
     const action = riskInfo.action || 'wait';
     const isCritical = riskInfo.level === 'critical' || action === 'do_not_install';
@@ -636,7 +666,7 @@ function renderHistorySummarySections(rawSummary, fallbackVerification) {
     }
     verdictTop.append(badges);
     verdict.append(verdictTop);
-    verdict.append(node('strong', '', actionLabels[action] || tr('action.wait')));
+    verdict.append(node('strong', '', localizeActionLabel(action)));
     verdict.append(node('p', '', summary.recommendation_reason || ''));
     if (isCritical && riskInfo.critical_reasons.length) {
       const crList = node('ul', 'critical-reasons-list');
@@ -679,7 +709,12 @@ function renderHistorySummarySections(rawSummary, fallbackVerification) {
     meter.append(fill);
     crossSec.append(meter);
     crossSec.append(node('p', 'dialog-summary-text',
-      `${vScore}% (${confidenceLabel(vScore, fallbackVerification.label)}) · ${fallbackVerification.independent_publishers || 1} publisher(s) · ${fallbackVerification.conflict_count || 0} conflict(s)`
+      tr('dialog.crossoverStats', {
+        score: vScore,
+        conf: confidenceLabel(vScore, fallbackVerification.label),
+        pubs: fallbackVerification.independent_publishers || 1,
+        conflicts: fallbackVerification.conflict_count || 0
+      })
     ));
     if ((fallbackVerification.breakdown || []).length) {
       const list = node('ul', 'breakdown-list');
@@ -733,6 +768,25 @@ function populateHistoryDialog(vendor, item, index, isLoading = false) {
 
   const verSnapshot = item.verification || (isCurrent ? latestData?.drivers?.[vendor]?.verification : null);
   body.append(renderHistorySummarySections(item.release_summary, verSnapshot));
+
+  const vHistory = item.verdict_history || (isCurrent ? latestData?.drivers?.[vendor]?.verdict_history : null) || [];
+  if (vHistory.length > 1) {
+    const vhSec = node('div', 'dialog-section');
+    vhSec.append(node('h3', '', tr('dialog.verdictHistory')));
+    const vhList = node('ul', 'verdict-timeline');
+    vHistory.forEach((step) => {
+      const li = node('li');
+      const actLabel = localizeActionLabel(step.action);
+      const rLabel = step.risk_level ? tr(`risk.${step.risk_level}`, null, step.risk_level) : '';
+      li.append(
+        node('span', '', `${actLabel}${rLabel ? ` (${rLabel})` : ''}`),
+        node('span', 'muted', formatDate(step.at, true))
+      );
+      vhList.append(li);
+    });
+    vhSec.append(vhList);
+    body.append(vhSec);
+  }
 
   const metaSec = node('div', 'dialog-section');
   metaSec.append(node('h3', '', tr('dialog.metadata')));
@@ -856,10 +910,11 @@ function renderHistory(history) {
   const vendors = activeHistoryVendor === 'all' ? Object.keys(LABELS) : [activeHistoryVendor];
   const actionLabels = {
     install: tr('action.install'),
+    observe: tr('action.observe'),
     wait: tr('action.wait'),
     do_not_install: tr('action.criticalBadge', null, 'CRÍTICO')
   };
-  const actionTone = { install: 'teal', wait: 'amber', do_not_install: 'critical' };
+  const actionTone = { install: 'teal', observe: 'blue', wait: 'amber', do_not_install: 'critical' };
 
   vendors.forEach((vendor) => {
     const box = node('article', 'history-card');
@@ -964,12 +1019,25 @@ async function showBrowserNotification(title, options) {
   new Notification(title, options);
 }
 
+function extractVerdictSnapshot(data) {
+  const out = {};
+  Object.entries(data?.drivers || {}).forEach(([vendor, drv]) => {
+    const ver = drv?.version;
+    const assessment = data?.advisor?.assessments?.[vendor];
+    if (!ver || assessment?.status !== 'ready') return;
+    const risk = resolveRisk(assessment);
+    out[vendor] = { version: ver, action: risk.action, level: risk.level };
+  });
+  return out;
+}
+
 function rememberCurrentNotifications(data) {
   if (!data) return;
   const alerts = data?.security_alerts || [];
   const versions = Object.fromEntries(Object.entries(data?.drivers || {}).map(([vendor, item]) => [vendor, item?.version || null]));
   localStorage.setItem(SEEN_ALERTS_KEY, JSON.stringify(alerts.map(alertFingerprint).slice(0, 100)));
   localStorage.setItem(SEEN_VERSIONS_KEY, JSON.stringify(versions));
+  localStorage.setItem(SEEN_VERDICTS_KEY, JSON.stringify(extractVerdictSnapshot(data)));
 }
 
 async function notifyChanges(data) {
@@ -990,8 +1058,8 @@ async function notifyChanges(data) {
     : [];
   localStorage.setItem(SEEN_ALERTS_KEY, JSON.stringify(fingerprints.slice(0, 100)));
   for (const alert of fresh.slice(0, 3)) {
-    await showBrowserNotification('DriveRadar Alert', {
-      body: alert.title || 'Security alert detected.',
+    await showBrowserNotification(tr('notif.alertTitle', null, 'DriveRadar Alert'), {
+      body: alert.title || '',
       icon: '/driveradar/static/logo.png',
       badge: '/driveradar/static/favicon-16.png',
       tag: `driveradar-${alertFingerprint(alert)}`,
@@ -1001,18 +1069,45 @@ async function notifyChanges(data) {
 
   let previousVersions = {};
   try { previousVersions = JSON.parse(localStorage.getItem(SEEN_VERSIONS_KEY)) || {}; } catch (_) { previousVersions = {}; }
+  let previousVerdicts = {};
+  try { previousVerdicts = JSON.parse(localStorage.getItem(SEEN_VERDICTS_KEY)) || {}; } catch (_) { previousVerdicts = {}; }
+
   const currentVersions = Object.fromEntries(Object.entries(data?.drivers || {}).map(([vendor, item]) => [vendor, item?.version || null]));
+  const currentVerdicts = extractVerdictSnapshot(data);
   localStorage.setItem(SEEN_VERSIONS_KEY, JSON.stringify(currentVersions));
+  localStorage.setItem(SEEN_VERDICTS_KEY, JSON.stringify({ ...previousVerdicts, ...currentVerdicts }));
+
+  const riskRank = { low: 0, moderate: 1, high: 2, critical: 3 };
   for (const vendor of ALERT_CATEGORIES.filter((category) => category !== 'vulnerabilities')) {
+    if (!preferences.categories[vendor]) continue;
     const version = currentVersions[vendor];
-    if (!preferences.categories[vendor] || !version || !previousVersions[vendor] || previousVersions[vendor] === version) continue;
-    await showBrowserNotification(`${LABELS[vendor]} ${version}`, {
-      body: `${LABELS[vendor]} ${version}`,
-      icon: '/driveradar/static/logo.png',
-      badge: '/driveradar/static/favicon-16.png',
-      tag: `driveradar-version-${vendor}-${version}`,
-      data: { url: '/driveradar/' }
-    });
+    const curVerdict = currentVerdicts[vendor];
+    const prevVerdict = previousVerdicts[vendor];
+    if (version && previousVersions[vendor] && previousVersions[vendor] !== version) {
+      const actLabel = localizeActionLabel(curVerdict?.action || 'observe');
+      await showBrowserNotification(tr('notif.newReleaseTitle', { vendor: LABELS[vendor], version }), {
+        body: tr('notif.newReleaseBody', { action: actLabel }),
+        icon: '/driveradar/static/logo.png',
+        badge: '/driveradar/static/favicon-16.png',
+        tag: `driveradar-version-${vendor}-${version}`,
+        data: { url: '/driveradar/' }
+      });
+    } else if (
+      version &&
+      curVerdict &&
+      prevVerdict &&
+      prevVerdict.version === version &&
+      (curVerdict.level === 'critical' || curVerdict.level === 'high') &&
+      (riskRank[curVerdict.level] || 0) > (riskRank[prevVerdict.level] || 0)
+    ) {
+      await showBrowserNotification(tr('notif.escalationTitle', { vendor: LABELS[vendor], version }), {
+        body: tr('notif.escalationBody', { action: localizeActionLabel(curVerdict.action) }),
+        icon: '/driveradar/static/logo.png',
+        badge: '/driveradar/static/favicon-16.png',
+        tag: `driveradar-escalation-${vendor}-${version}-${curVerdict.level}`,
+        data: { url: '/driveradar/' }
+      });
+    }
   }
 }
 

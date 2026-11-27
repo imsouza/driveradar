@@ -4,7 +4,7 @@ self.addEventListener('push', (event) => {
   let payload = {};
   try { payload = event.data ? event.data.json() : {}; } catch (_) { payload = {}; }
   event.waitUntil(self.registration.showNotification(payload.title || 'DriveRadar', {
-    body: payload.body || 'Novo alerta de atualização disponível.',
+    body: payload.body || 'DriveRadar',
     icon: '/driveradar/static/logo.png',
     badge: '/driveradar/static/favicon-16.png',
     tag: payload.tag || 'driveradar-alert',

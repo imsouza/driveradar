@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import urllib.parse
 from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -52,6 +53,12 @@ NVIDIA_AJAX_URL = (
     "AjaxDriverService.php?func=DriverManualLookup&psid=131&pfid=1066&osID=135"
     "&languageCode=1033&beta=0&isWHQL=1&dltype=-1&dch=1&upCRD=0&qnf=0&ctk=null"
     "&sort1=1&numberOfResults=12"
+)
+NVIDIA_AJAX_BETA_URL = (
+    "https://gfwsl.geforce.com/services_toolkit/services/com/nvidia/services/"
+    "AjaxDriverService.php?func=DriverManualLookup&psid=131&pfid=1066&osID=135"
+    "&languageCode=1033&beta=1&isWHQL=0&dltype=-1&dch=1&upCRD=0&qnf=0&ctk=null"
+    "&sort1=1&numberOfResults=6"
 )
 AMD_DRIVER_PAGE_URL = (
     "https://www.amd.com/en/support/downloads/drivers.html/"
@@ -422,7 +429,18 @@ class UpdateMonitor:
     """Collect current versions and source metadata with bounded requests."""
 
     def __init__(self, session: requests.Session | None = None) -> None:
-        self.session = session or self._build_session()
+        self._injected_session = session
+        self._local = threading.local()
+
+    @property
+    def session(self) -> requests.Session:
+        if self._injected_session is not None:
+            return self._injected_session
+        sess = getattr(self._local, "session", None)
+        if sess is None:
+            sess = self._build_session()
+            self._local.session = sess
+        return sess
 
     @staticmethod
     def _build_session() -> requests.Session:
@@ -433,20 +451,40 @@ class UpdateMonitor:
             read=2,
             backoff_factor=0.4,
             status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=frozenset({"GET"}),
+            allowed_methods=frozenset({"GET", "HEAD"}),
         )
         session.mount("https://", HTTPAdapter(max_retries=retries))
         session.headers.update({"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.8"})
         return session
+
+    def _probe_file_size(self, url: str | None, referer: str | None = None) -> str | None:
+        if not url or not re.search(r"\.(?:exe|msi|msu|cab|zip)(?:\?|$)", url, re.I):
+            return None
+        head_fn = getattr(self.session, "head", None)
+        if not callable(head_fn):
+            return None
+        headers = {"Referer": referer} if referer else None
+        try:
+            resp = head_fn(url, headers=headers, timeout=(3, 6), allow_redirects=True)
+            if getattr(resp, "status_code", 500) >= 400:
+                return None
+            raw_len = (getattr(resp, "headers", None) or {}).get("Content-Length")
+            size_bytes = int(raw_len) if raw_len else 0
+            if size_bytes < 1_048_576:
+                return None
+            mb = size_bytes / (1024 * 1024)
+            return f"{mb / 1024:.2f} GB" if mb >= 1024 else f"{mb:.0f} MB"
+        except Exception:
+            return None
 
     def _get_soup(self, url: str) -> BeautifulSoup:
         response = self.session.get(url, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
         return BeautifulSoup(response.text, "html.parser")
 
-    def _fetch_nvidia_ajax(self) -> list[dict[str, Any]]:
+    def _fetch_nvidia_ajax(self, url: str = NVIDIA_AJAX_URL) -> list[dict[str, Any]]:
         try:
-            response = self.session.get(NVIDIA_AJAX_URL, timeout=REQUEST_TIMEOUT)
+            response = self.session.get(url, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             payload = response.json() if hasattr(response, "json") else {}
         except Exception as exc:
@@ -470,7 +508,16 @@ class UpdateMonitor:
             name = _safe_text(urllib.parse.unquote(str(info.get("Name") or "GeForce Game Ready Driver")), 80)
             is_whql = str(info.get("IsWHQL") or "") == "1"
             is_beta = str(info.get("IsBeta") or "") == "1"
-            channel = "Beta" if is_beta else f"WHQL · {name}" if is_whql else name
+            is_hotfix = "hotfix" in name.casefold()
+            channel = (
+                f"Hotfix · {name}"
+                if is_hotfix
+                else "Beta / Hotfix"
+                if is_beta
+                else f"WHQL · {name}"
+                if is_whql
+                else name
+            )
             details_url = _safe_text(info.get("DetailsURL"), 300) or OFFICIAL_URLS["nvidia"]
             download_url = _safe_text(info.get("DownloadURL"), 400) or details_url
             entries.append({
@@ -481,6 +528,7 @@ class UpdateMonitor:
                 "source_url": details_url,
                 "official_url": download_url,
                 "release_notes_url": pdf_url,
+                "is_hotfix_or_beta": is_beta or is_hotfix,
             })
         return entries
 
@@ -600,7 +648,8 @@ class UpdateMonitor:
         raise ValueError(f"Unsupported vendor: {vendor}")
 
     def _get_nvidia_release(self) -> dict[str, Any]:
-        ajax_entries = self._fetch_nvidia_ajax()
+        ajax_entries = self._fetch_nvidia_ajax(NVIDIA_AJAX_URL)
+        beta_entries = self._fetch_nvidia_ajax(NVIDIA_AJAX_BETA_URL) if self._injected_session is None else []
         tpu_url = TECHPOWERUP_URLS["nvidia"]
         tpu_entries: list[dict[str, Any]] = []
         tpu_version: str | None = None
@@ -623,6 +672,13 @@ class UpdateMonitor:
             primary_entry = ajax_entries[0]
             version = primary_entry["version"]
             release_date = primary_entry["release_date"]
+            newer_hotfix = None
+            cur_parts = tuple(int(p) for p in re.findall(r"\d+", version))
+            for b_entry in beta_entries:
+                b_parts = tuple(int(p) for p in re.findall(r"\d+", b_entry["version"]))
+                if b_parts > cur_parts:
+                    newer_hotfix = b_entry
+                    break
             pdf_result = self._fetch_nvidia_pdf(version, primary_entry.get("release_notes_url"))
             if pdf_result:
                 notes_url, notes_text, structured = pdf_result
@@ -644,6 +700,18 @@ class UpdateMonitor:
                     "published_at": release_date,
                 }
             ]
+            if newer_hotfix:
+                evidence.append({
+                    "version": newer_hotfix["version"],
+                    "url": newer_hotfix["source_url"],
+                    "source_name": "NVIDIA Hotfix",
+                    "publisher": "NVIDIA Hotfix",
+                    "tier": "primary",
+                    "weight": 0.9,
+                    "title": f"NVIDIA {newer_hotfix['channel']} {newer_hotfix['version']}",
+                    "published_at": newer_hotfix.get("release_date"),
+                    "conflict_type": "newer_reported",
+                })
             if tpu_version:
                 evidence.append({
                     "version": tpu_version,
@@ -656,12 +724,19 @@ class UpdateMonitor:
                     "published_at": tpu_date,
                 })
 
+            resolved_size = (
+                primary_entry["file_size"]
+                or tpu_top.get("file_size")
+                or self._probe_file_size(primary_entry["official_url"], OFFICIAL_URLS["nvidia"])
+            )
+            combined_recent = ([newer_hotfix] if newer_hotfix else []) + ajax_entries[:10]
             return {
                 "version": version,
                 "release_date": release_date,
                 "channel": primary_entry["channel"],
-                "file_size": primary_entry["file_size"] or tpu_top.get("file_size"),
+                "file_size": resolved_size,
                 "sha256": tpu_top.get("sha256"),
+                "hotfix_available": newer_hotfix,
                 "date_delta_days": _date_delta_days(release_date, tpu_date) if tpu_version == version else None,
                 "source_url": primary_entry["source_url"],
                 "source_name": "NVIDIA",
@@ -671,7 +746,7 @@ class UpdateMonitor:
                 "primary_verified": True,
                 "evidence": evidence,
                 "release_notes": {"url": notes_url, "text": notes_text, "structured": structured},
-                "recent_releases": ajax_entries[:10],
+                "recent_releases": combined_recent[:10],
                 "error": None,
             }
 
@@ -886,16 +961,35 @@ class UpdateMonitor:
                     "published_at": tpu_date,
                 })
 
+            exe_match = re.search(
+                r'https://downloadmirror\.intel\.com/\d+/[^\s"\'<>]+\.exe',
+                response.text,
+                re.I,
+            )
+            exe_url = exe_match.group(0) if exe_match else None
+            html_size_match = re.search(
+                r"(?:Size|大小)\s*[:：]?\s*(?:<[^>]+>\s*)*(\d+(?:\.\d+)?\s*(?:MB|GB))",
+                response.text,
+                re.I,
+            )
+            intel_file_size = (
+                tpu_top.get("file_size")
+                or (html_size_match.group(1) if html_size_match else None)
+                or self._probe_file_size(exe_url, INTEL_CN_DOWNLOAD_URL)
+            )
+            sha_match = re.search(r"SHA256\s*[:：]?\s*([A-Fa-f0-9]{64})", response.text)
+            intel_sha256 = tpu_top.get("sha256") or (sha_match.group(1).lower() if sha_match else None)
+
             return {
                 "version": version,
                 "release_date": release_date,
                 "channel": channel,
-                "file_size": tpu_top.get("file_size"),
-                "sha256": tpu_top.get("sha256"),
+                "file_size": intel_file_size,
+                "sha256": intel_sha256,
                 "date_delta_days": _date_delta_days(release_date, tpu_date) if tpu_ver == version else None,
                 "source_url": INTEL_CN_DOWNLOAD_URL,
                 "source_name": "Intel",
-                "official_url": INTEL_CN_DOWNLOAD_URL,
+                "official_url": exe_url or INTEL_CN_DOWNLOAD_URL,
                 "release_notes_url": notes_url,
                 "verified": True,
                 "primary_verified": True,
