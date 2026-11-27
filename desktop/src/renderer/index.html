@@ -14,15 +14,15 @@
         <span class="brand-dot" aria-hidden="true"></span>
         <div>
           <strong>DriveRadar</strong>
-          <small id="app-version">v1.5.2</small>
+          <small id="app-version">v1.6.0</small>
         </div>
       </div>
       <nav class="nav-list" aria-label="Navegação">
-        <button class="nav-item active" data-tab="drivers" type="button">Drivers</button>
-        <button class="nav-item" data-tab="history" type="button">Histórico</button>
-        <button class="nav-item" data-tab="alerts" type="button">Alertas</button>
-        <button class="nav-item" data-tab="settings" type="button">Configurações</button>
-        <button class="nav-item" data-tab="about" type="button">Sobre</button>
+        <button class="nav-item active" data-tab="drivers" type="button"><span class="nav-label">Drivers</span><span class="nav-badge" id="badge-drivers" hidden></span></button>
+        <button class="nav-item" data-tab="history" type="button"><span class="nav-label">Histórico</span><span class="nav-badge" id="badge-history" hidden></span></button>
+        <button class="nav-item" data-tab="alerts" type="button"><span class="nav-label">Alertas</span><span class="nav-badge" id="badge-alerts" hidden></span></button>
+        <button class="nav-item" data-tab="settings" type="button"><span class="nav-label">Configurações</span></button>
+        <button class="nav-item" data-tab="about" type="button"><span class="nav-label">Sobre</span><span class="nav-badge" id="badge-about" hidden></span></button>
       </nav>
       <div class="sidebar-footer">
         <div class="sync-meta">
@@ -68,6 +68,7 @@
               <p id="drivers-subtitle">Versões confirmadas por verificação cruzada e notas oficiais.</p>
             </div>
           </header>
+          <div class="kpi-strip" id="drivers-kpi-strip"></div>
           <p class="observation-tip" id="drivers-observation-tip" role="note">
             <strong id="drivers-tip-title">Janela de maturação automática (4 dias / 96h):</strong>
             <span id="drivers-tip-body">Lançamentos recentes permanecem Em Observação por 96h (sem selo verde prematuro) enquanto o sistema monitora relatos pós-lançamento. Se surgir falha grave a qualquer hora, o alerta muda imediatamente para Crítico.</span>
@@ -99,7 +100,7 @@
           <div class="toolbar">
             <div class="filter-pills" id="alert-filters"></div>
           </div>
-          <div class="alert-list" id="alert-list"></div>
+          <div class="alert-grid" id="alert-list"></div>
         </section>
 
         <section class="tab-panel" id="tab-settings" hidden>
@@ -110,7 +111,7 @@
             </div>
             <span class="save-toast" id="save-toast" hidden>Preferências salvas</span>
           </header>
-          <div class="settings-stack" id="settings-container"></div>
+          <div class="settings-grid" id="settings-container"></div>
         </section>
 
         <section class="tab-panel" id="tab-about" hidden>
@@ -120,7 +121,7 @@
               <p>Como o DriveRadar verifica versões, calcula confiança e classifica riscos.</p>
             </div>
           </header>
-          <div class="settings-stack" id="about-container"></div>
+          <div class="about-layout" id="about-container"></div>
         </section>
       </main>
     </div>

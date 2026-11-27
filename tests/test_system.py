@@ -611,7 +611,8 @@ class RegistryAndFrontendTests(unittest.TestCase):
         self.assertIn("renderAbout", desktop_renderer)
         for obs_marker in ("drivers-observation-tip", "fresh-callout"):
             self.assertIn(obs_marker, page + script)
-            self.assertIn(obs_marker, desktop_html + desktop_renderer)
+        for desk_obs_marker in ("drivers-observation-tip", "soak-inline"):
+            self.assertIn(desk_obs_marker, desktop_html + desktop_renderer)
         self.assertIn("drivers.waitTipBody", web_i18n)
         self.assertIn("drivers.waitTipBody", desktop_i18n)
         self.assertIn("notif.recFreshTip", desktop_i18n)
@@ -1055,15 +1056,24 @@ class SoakMaturityAndSeniorQATests(unittest.TestCase):
     def test_desktop_v140_parity_escalation_and_api_guard_markers(self):
         root = Path(__file__).parents[1]
         pkg = json.loads((root / "desktop/package.json").read_text(encoding="utf-8"))
-        self.assertEqual(pkg["version"], "1.5.2")
+        self.assertEqual(pkg["version"], "1.6.0")
         main_js = (root / "desktop/src/main.js").read_text(encoding="utf-8")
         preload_js = (root / "desktop/src/preload.js").read_text(encoding="utf-8")
         renderer_js = (root / "desktop/src/renderer/renderer.js").read_text(encoding="utf-8")
         web_js = (root / "static/js/app.js").read_text(encoding="utf-8")
-        for marker in ("settings:validateApi", "notifyEscalation", "notif.escalationTitle", "tray.tagObserve"):
+        for marker in ("settings:validateApi", "notifyEscalation", "notif.escalationTitle", "tray.tagObserve", "setupDownloadManager"):
             self.assertIn(marker, main_js)
         self.assertIn("validateApiEndpoint", preload_js)
-        for marker in ("verdict-change-banner", "meter-progress soak", "copy-hash-btn", "applyValidatedApiUrl", "signal-mini-grid"):
+        self.assertIn("downloadDriver", preload_js)
+        for marker in (
+            "verdict-change-banner",
+            "meter-progress soak",
+            "copy-hash-btn",
+            "applyValidatedApiUrl",
+            "signal-mini-grid",
+            "populateAboutSourcesList",
+            "renderKpiStrip",
+        ):
             self.assertIn(marker, renderer_js)
         for marker in ("SEEN_VERDICTS_KEY", "verdict-change-banner", "soak-meter", "notif.escalationTitle"):
             self.assertIn(marker, web_js)

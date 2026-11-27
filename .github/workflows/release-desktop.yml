@@ -64,6 +64,8 @@ jobs:
           body: |
             ## DriveRadar Desktop for Windows (${{ github.ref_name }})
 
+            - **Native Windows Download Manager**: Clicking *Download* on NVIDIA, AMD, or Intel drivers opens the native Windows Save dialog with live taskbar & banner progress, AMD `Referer` header support, and one-click *Show in folder* — plus instant app update progress without blockmap stalls.
+            - **Redesigned Bento Desktop UI & Complete Crossover Sources Directory**: 4-KPI summary strip, 2-column Bento layout for Settings, Alerts, and About, unified soak progress inside verdict cards, sidebar counters, and an interactive directory of all 60+ Crossover sources with search, filter pills, and live latency in *About*.
             - **Dual-Track Community Validation**: Validate driver risk assessments (*Makes sense* vs. *Doesn't make sense* with structured reason tags including false positives and hardware symptoms) and security alerts (*Useful* vs. *False positive*) directly from Windows Desktop or Web — backed by Wilson confidence intervals, `/24` & `/64` subnet Sybil protection, and a strict Zero-Override rule that never weakens deterministic `Critical` or 96h `Observing` verdicts.
             - **End-to-End Security Hardening**: Strict renderer CSP (`style-src 'self'; connect-src 'none'`), Windows DPAPI (`safeStorage`) encrypted voter proofs, HTTPS + SSRF private-IP guards on custom API endpoints, denied permission/navigation handlers, and zero npm supply-chain vulnerabilities.
             - **Deterministic 96-Hour Soak Engine & Escalation Alerts**: Newly released drivers stay in `Observing` mode for 96h with a live progress bar and trigger native Windows notifications if a driver escalates to `Critical` or `High` post-launch.

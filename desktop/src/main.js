@@ -665,10 +665,10 @@ async function checkForAppUpdates(manual = false) {
 
 function createWindow(startHidden) {
   mainWindow = new BrowserWindow({
-    width: 1120,
-    height: 740,
-    minWidth: 880,
-    minHeight: 600,
+    width: 1260,
+    height: 820,
+    minWidth: 920,
+    minHeight: 620,
     show: !startHidden,
     autoHideMenuBar: true,
     backgroundColor: '#0c0d0f',

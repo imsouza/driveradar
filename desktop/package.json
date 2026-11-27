@@ -1,6 +1,6 @@
 {
   "name": "driveradar-desktop",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "DriveRadar Desktop for Windows — minimalist NVIDIA, AMD, Intel, and Windows 11 update tracker with system tray, native notifications, risk scoring, and automatic updates.",
   "main": "src/main.js",
   "author": "OptLabs",

@@ -15,6 +15,8 @@ let currentAppInfo = null;
 let activeHistoryVendor = 'all';
 let historySearch = '';
 let activeAlertVendor = 'all';
+let activeAboutSourceFilter = 'all';
+let aboutSourceSearch = '';
 let toastTimer = null;
 let voteState = { token: '', issuedAt: 0, tallies: {}, myVotes: {}, pending: new Set() };
 const DRIVER_DOWN_TAGS = [
@@ -287,7 +289,8 @@ function applyStaticLabels() {
   document.documentElement.lang = activeLang();
   const navMap = { drivers: 'nav.drivers', history: 'nav.history', alerts: 'nav.alerts', settings: 'nav.settings', about: 'nav.about' };
   document.querySelectorAll('.nav-item').forEach((btn) => {
-    if (navMap[btn.dataset.tab]) btn.textContent = tr(navMap[btn.dataset.tab]);
+    const lbl = btn.querySelector('.nav-label') || btn;
+    if (navMap[btn.dataset.tab]) lbl.textContent = tr(navMap[btn.dataset.tab]);
   });
   $('#btn-refresh').textContent = tr('btn.refresh');
   $('#banner-download').textContent = tr('banner.download');
@@ -339,7 +342,84 @@ function renderSyncMeta(data) {
   timeEl.textContent = tr('sync.updatedAt', { date: formatDate(data.last_updated, true) });
 }
 
+function setNavBadge(id, value) {
+  const badge = $(id);
+  if (!badge) return;
+  const num = Number(value || 0);
+  badge.hidden = num <= 0;
+  if (num > 0) badge.textContent = String(num);
+}
+
+function updateNavBadges(data) {
+  if (!data) return;
+  const enabledVendors = currentSettings?.vendors || { nvidia: true, amd: true, intel: true, windows: true };
+  const driverCount = Object.keys(LABELS).filter((v) => enabledVendors[v]).length || 4;
+  const histCount = Object.values(data.history || {}).reduce((s, arr) => s + (arr?.length || 0), 0);
+  const alertCount = (data.security_alerts || []).length;
+  const sourceCount = data.source_audit?.configured_sources || (data.source_audit?.sources || []).length || 0;
+  setNavBadge('#badge-drivers', driverCount);
+  setNavBadge('#badge-history', histCount);
+  setNavBadge('#badge-alerts', alertCount);
+  setNavBadge('#badge-about', sourceCount);
+}
+
+function renderKpiStrip(data) {
+  const strip = $('#drivers-kpi-strip');
+  if (!strip) return;
+  strip.replaceChildren();
+  if (!data) return;
+  const collection = data.collection || data.source_audit || {};
+  const drivers = Object.values(data.drivers || {});
+  const verifiedCount = drivers.filter((d) => d?.verification?.primary_confirmed).length;
+  const avgScore = drivers.length
+    ? Math.round(drivers.reduce((s, d) => s + Number(d?.verification?.score || 0), 0) / drivers.length)
+    : 0;
+  const conflicts = drivers.reduce((s, d) => s + (d?.verification?.conflicts?.length || 0), 0);
+  const alertsCount = (data.security_alerts || []).length;
+
+  const cards = [
+    {
+      eyebrow: tr('kpi.reachable'),
+      val: `${collection.reachable_sources || 0}/${collection.configured_sources || 0}`,
+      sub: tr('kpi.publishers', { count: collection.independent_publishers || 0 }),
+      onClick: () => {
+        switchTab('about');
+        setTimeout(() => $('#about-sources-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 40);
+      }
+    },
+    {
+      eyebrow: tr('kpi.verified'),
+      val: `${verifiedCount}/${drivers.length || 4}`,
+      sub: tr('kpi.verifiedSub'),
+      onClick: null
+    },
+    {
+      eyebrow: tr('kpi.confidence'),
+      val: `${avgScore}%`,
+      sub: tr('kpi.confidenceSub'),
+      onClick: null
+    },
+    {
+      eyebrow: tr('kpi.alerts'),
+      val: String(conflicts + alertsCount),
+      sub: tr('kpi.alertsSub', { count: alertsCount }),
+      onClick: () => switchTab('alerts')
+    }
+  ];
+
+  cards.forEach((c) => {
+    const el = node(c.onClick ? 'button' : 'div', 'kpi-card');
+    if (c.onClick) {
+      el.type = 'button';
+      el.addEventListener('click', c.onClick);
+    }
+    el.append(node('small', '', c.eyebrow), node('strong', '', c.val), node('span', '', c.sub));
+    strip.append(el);
+  });
+}
+
 function renderDrivers(data) {
+  renderKpiStrip(data);
   const grid = $('#driver-grid');
   grid.replaceChildren();
   const drivers = data?.drivers || {};
@@ -389,21 +469,6 @@ function renderDrivers(data) {
       ));
     }
 
-    if (maturity.in_quarantine && !maturity.security_bypass && !isCritical && riskInfo.level !== 'high') {
-      const callout = node('div', 'fresh-callout');
-      const pct = Number(maturity.progress_pct || 25);
-      const remHours = Math.max(1, Math.round(Number(maturity.remaining_hours || 48)));
-      callout.append(
-        node('strong', '', tr('drivers.soakTitle', { day: maturity.soak_day || 1, total: maturity.window_days || 4, pct })),
-        node('span', '', tr('drivers.freshRelease', { hours: remHours }))
-      );
-      const bar = node('progress', 'meter-progress soak');
-      bar.max = 100;
-      bar.value = pct;
-      callout.append(bar);
-      card.append(callout);
-    }
-
     const conflicts = ver.conflicts || [];
     if (conflicts.length) {
       const cBox = node('div', 'conflict-box');
@@ -438,6 +503,17 @@ function renderDrivers(data) {
     }
     if (rec?.target_audience) {
       vBox.append(node('p', 'target-note', tr('drivers.target', { val: rec.target_audience })));
+    }
+    if (maturity.in_quarantine && !maturity.security_bypass && !isCritical && riskInfo.level !== 'high') {
+      const pct = Number(maturity.progress_pct || 25);
+      const remHours = Math.max(1, Math.round(Number(maturity.remaining_hours || 48)));
+      const soakWrap = node('div', 'soak-inline');
+      soakWrap.append(node('small', '', `${tr('drivers.soakTitle', { day: maturity.soak_day || 1, total: maturity.window_days || 4, pct })} · ~${remHours}h`));
+      const bar = node('progress', 'meter-progress soak');
+      bar.max = 100;
+      bar.value = pct;
+      soakWrap.append(bar);
+      vBox.append(soakWrap);
     }
     card.append(vBox);
 
@@ -499,7 +575,8 @@ function renderDrivers(data) {
     const foot = node('div', 'card-foot');
     const links = node('div', 'link-row');
     if (item.official_url) {
-      const dl = node('button', 'link-btn', vendor === 'windows' ? tr('drivers.officialPage') : tr('drivers.download'));
+      const labelText = vendor === 'windows' ? tr('drivers.officialPage') : `⬇ ${tr('drivers.download').replace(/\s*↗$/, '')}`;
+      const dl = node('button', 'btn-download', labelText);
       dl.type = 'button';
       dl.addEventListener('click', () => window.driveRadar.downloadDriver(item.official_url));
       links.append(dl);
@@ -878,6 +955,9 @@ function renderSettings() {
   const root = $('#settings-container');
   root.replaceChildren();
 
+  const colLeft = node('div', 'settings-col');
+  const colRight = node('div', 'settings-col');
+
   const gMon = node('section', 'settings-group');
   gMon.append(node('h2', '', tr('settings.monitoring')));
   const vendorRow = node('div', 'setting-row');
@@ -906,42 +986,7 @@ function renderSettings() {
   gMon.append(makeToggleRow(tr('settings.skipBeta'), tr('settings.skipBetaDesc'), currentSettings.ignoreBetaPreview, (v) => updateSetting({ ignoreBetaPreview: v })));
   gMon.append(makeToggleRow(tr('settings.notifyConflicts'), tr('settings.notifyConflictsDesc'), currentSettings.notifyConflicts, (v) => updateSetting({ notifyConflicts: v })));
   gMon.append(makeToggleRow(tr('settings.notifyEscalation'), tr('settings.notifyEscalationDesc'), currentSettings.notifyEscalation !== false, (v) => updateSetting({ notifyEscalation: v })));
-  root.append(gMon);
-
-  const gNotif = node('section', 'settings-group');
-  gNotif.append(node('h2', '', tr('settings.notifications')));
-  gNotif.append(makeToggleRow(tr('settings.notifEnable'), tr('settings.notifEnableDesc'), currentSettings.notificationsEnabled, (v) => updateSetting({ notificationsEnabled: v })));
-  gNotif.append(makeToggleRow(tr('settings.notifSound'), tr('settings.notifSoundDesc'), currentSettings.notificationSound, (v) => updateSetting({ notificationSound: v })));
-  gNotif.append(makeSelectRow(
-    tr('settings.secLevel'),
-    tr('settings.secLevelDesc'),
-    currentSettings.securitySeverity,
-    [['off', tr('settings.secOff')], ['critical', tr('settings.secCrit')], ['high', tr('settings.secHigh')], ['all', tr('settings.secAll')]],
-    (v) => updateSetting({ securitySeverity: v })
-  ));
-  gNotif.append(makeToggleRow(tr('settings.quiet'), tr('settings.quietDesc'), currentSettings.quietHoursEnabled, (v) => updateSetting({ quietHoursEnabled: v })));
-
-  const qRow = node('div', 'setting-row');
-  const qLabel = node('label');
-  qLabel.append(node('strong', '', tr('settings.quietRange')), node('small', '', tr('settings.quietRangeDesc')));
-  const range = node('div', 'time-range');
-  const tStart = node('input'); tStart.type = 'time'; tStart.value = currentSettings.quietHoursStart;
-  const tEnd = node('input'); tEnd.type = 'time'; tEnd.value = currentSettings.quietHoursEnd;
-  tStart.addEventListener('change', () => updateSetting({ quietHoursStart: tStart.value }));
-  tEnd.addEventListener('change', () => updateSetting({ quietHoursEnd: tEnd.value }));
-  range.append(tStart, document.createTextNode(tr('settings.until')), tEnd);
-  qRow.append(qLabel, range);
-  gNotif.append(qRow);
-
-  const testRow = node('div', 'setting-row');
-  const testLbl = node('label');
-  testLbl.append(node('strong', '', tr('settings.testTitle')), node('small', '', tr('settings.testDesc')));
-  const testBtn = node('button', 'btn-outline', tr('settings.testBtn'));
-  testBtn.type = 'button';
-  testBtn.addEventListener('click', () => window.driveRadar.testNotification());
-  testRow.append(testLbl, testBtn);
-  gNotif.append(testRow);
-  root.append(gNotif);
+  colLeft.append(gMon);
 
   const gTray = node('section', 'settings-group');
   gTray.append(node('h2', '', tr('settings.trayGroup')));
@@ -949,7 +994,7 @@ function renderSettings() {
   gTray.append(makeToggleRow(tr('settings.startMin'), tr('settings.startMinDesc'), currentSettings.startMinimized, (v) => updateSetting({ startMinimized: v })));
   gTray.append(makeToggleRow(tr('settings.closeTray'), tr('settings.closeTrayDesc'), currentSettings.closeToTray, (v) => updateSetting({ closeToTray: v })));
   gTray.append(makeToggleRow(tr('settings.minTray'), tr('settings.minTrayDesc'), currentSettings.minimizeToTray, (v) => updateSetting({ minimizeToTray: v })));
-  root.append(gTray);
+  colLeft.append(gTray);
 
   const gApp = node('section', 'settings-group');
   gApp.append(node('h2', '', tr('settings.appGroup')));
@@ -986,7 +1031,7 @@ function renderSettings() {
 
   const updBox = node('div', 'updater-box');
   const updInfo = node('div');
-  updInfo.append(node('strong', '', `DriveRadar v${currentAppInfo?.version || '1.0.0'}`));
+  updInfo.append(node('strong', '', `DriveRadar v${currentAppInfo?.version || '1.6.0'}`));
   const updMsg = node('small', '', currentAppInfo?.updater?.message || '');
   updMsg.id = 'settings-updater-msg';
   updInfo.append(updMsg);
@@ -1002,10 +1047,57 @@ function renderSettings() {
   updActions.append(installBtn, checkBtn);
   updBox.append(updInfo, updActions);
   gApp.append(updBox);
+  colRight.append(gApp);
 
-  const adv = node('details', 'mt-sm');
+  const gNotif = node('section', 'settings-group');
+  gNotif.append(node('h2', '', tr('settings.notifications')));
+  gNotif.append(makeToggleRow(tr('settings.notifEnable'), tr('settings.notifEnableDesc'), currentSettings.notificationsEnabled, (v) => updateSetting({ notificationsEnabled: v })));
+  gNotif.append(makeToggleRow(tr('settings.notifSound'), tr('settings.notifSoundDesc'), currentSettings.notificationSound, (v) => updateSetting({ notificationSound: v })));
+  gNotif.append(makeSelectRow(
+    tr('settings.secLevel'),
+    tr('settings.secLevelDesc'),
+    currentSettings.securitySeverity,
+    [['off', tr('settings.secOff')], ['critical', tr('settings.secCrit')], ['high', tr('settings.secHigh')], ['all', tr('settings.secAll')]],
+    (v) => updateSetting({ securitySeverity: v })
+  ));
+
+  const qRow = node('div', `setting-row${currentSettings.quietHoursEnabled ? '' : ' dimmed'}`);
+  const qLabel = node('label');
+  qLabel.append(node('strong', '', tr('settings.quietRange')), node('small', '', tr('settings.quietRangeDesc')));
+  const range = node('div', 'time-range');
+  const tStart = node('input'); tStart.type = 'time'; tStart.value = currentSettings.quietHoursStart;
+  const tEnd = node('input'); tEnd.type = 'time'; tEnd.value = currentSettings.quietHoursEnd;
+  tStart.disabled = !currentSettings.quietHoursEnabled;
+  tEnd.disabled = !currentSettings.quietHoursEnabled;
+  tStart.addEventListener('change', () => updateSetting({ quietHoursStart: tStart.value }));
+  tEnd.addEventListener('change', () => updateSetting({ quietHoursEnd: tEnd.value }));
+  range.append(tStart, document.createTextNode(tr('settings.until')), tEnd);
+  qRow.append(qLabel, range);
+
+  gNotif.append(makeToggleRow(tr('settings.quiet'), tr('settings.quietDesc'), currentSettings.quietHoursEnabled, (v) => {
+    qRow.classList.toggle('dimmed', !v);
+    tStart.disabled = !v;
+    tEnd.disabled = !v;
+    updateSetting({ quietHoursEnabled: v });
+  }));
+  gNotif.append(qRow);
+
+  const testRow = node('div', 'setting-row');
+  const testLbl = node('label');
+  testLbl.append(node('strong', '', tr('settings.testTitle')), node('small', '', tr('settings.testDesc')));
+  const testBtn = node('button', 'btn-outline', tr('settings.testBtn'));
+  testBtn.type = 'button';
+  testBtn.addEventListener('click', () => window.driveRadar.testNotification());
+  testRow.append(testLbl, testBtn);
+  gNotif.append(testRow);
+  colRight.append(gNotif);
+
+  root.append(colLeft, colRight);
+
+  const gAdv = node('section', 'settings-group span-full');
+  const adv = node('details');
   adv.append(node('summary', '', tr('settings.advApi')));
-  const urlRow = node('div', 'setting-row');
+  const urlRow = node('div', 'setting-row mt-sm');
   const uLbl = node('label');
   const feedback = node('small', 'api-feedback', '');
   uLbl.append(node('strong', '', tr('settings.apiBase')), node('small', '', tr('settings.apiBaseDesc')), feedback);
@@ -1038,14 +1130,93 @@ function renderSettings() {
   urlControls.append(urlInput, resetBtn);
   urlRow.append(uLbl, urlControls);
   adv.append(urlRow);
-  gApp.append(adv);
-  root.append(gApp);
+  gAdv.append(adv);
+  root.append(gAdv);
+}
+
+function populateAboutSourcesList(listEl, filtersEl, summaryEl) {
+  const audit = currentData?.source_audit || {};
+  const sources = audit.sources || [];
+  if (summaryEl) {
+    summaryEl.textContent = tr('about.sourcesSummary', {
+      reachable: audit.reachable_sources || sources.filter((s) => s.status === 'reachable').length,
+      configured: audit.configured_sources || sources.length,
+      publishers: audit.independent_publishers || 0
+    });
+  }
+  if (filtersEl) {
+    filtersEl.replaceChildren();
+    const counts = {
+      all: sources.length,
+      reachable: sources.filter((s) => s.status === 'reachable').length,
+      matched: sources.filter((s) => (s.matched_versions || []).length > 0).length,
+      unavailable: sources.filter((s) => s.status !== 'reachable').length
+    };
+    [
+      ['all', tr('about.sourcesAll', { count: counts.all })],
+      ['reachable', tr('about.sourcesReachable', { count: counts.reachable })],
+      ['matched', tr('about.sourcesMatched', { count: counts.matched })],
+      ['unavailable', tr('about.sourcesDown', { count: counts.unavailable })]
+    ].forEach(([key, label]) => {
+      const btn = node('button', `filter-pill ${activeAboutSourceFilter === key ? 'active' : ''}`, label);
+      btn.type = 'button';
+      btn.addEventListener('click', () => {
+        activeAboutSourceFilter = key;
+        populateAboutSourcesList(listEl, filtersEl, summaryEl);
+      });
+      filtersEl.append(btn);
+    });
+  }
+  if (!listEl) return;
+  listEl.replaceChildren();
+  const q = aboutSourceSearch.trim().toLowerCase();
+  const filtered = sources.filter((s) => {
+    if (activeAboutSourceFilter === 'reachable' && s.status !== 'reachable') return false;
+    if (activeAboutSourceFilter === 'matched' && !(s.matched_versions || []).length) return false;
+    if (activeAboutSourceFilter === 'unavailable' && s.status === 'reachable') return false;
+    if (q) {
+      const hay = `${s.name || ''} ${s.publisher || ''} ${s.tier || ''} ${(s.matched_versions || []).join(' ')}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  if (!filtered.length) {
+    listEl.append(node('p', 'about-lead', tr('about.sourcesEmpty')));
+    return;
+  }
+
+  filtered.forEach((src) => {
+    const item = node('div', 'source-item');
+    const main = node('div', 'source-main');
+    const linkBtn = node('button', 'source-link', `${src.name} ↗`);
+    linkBtn.type = 'button';
+    linkBtn.title = src.url || src.name;
+    linkBtn.addEventListener('click', () => window.driveRadar.openExternal(src.url));
+    const tierKey = `about.tier.${String(src.tier || '').toLowerCase()}`;
+    const tierLabel = tr(tierKey) !== tierKey ? tr(tierKey) : (src.tier || '');
+    const matches = (src.matched_versions || []).length ? ` · Match: ${src.matched_versions.join(', ')}` : '';
+    main.append(linkBtn, node('small', '', `${src.publisher || src.name} · ${tierLabel}${matches}`));
+    const isUp = src.status === 'reachable';
+    const statusLabel = isUp
+      ? `${src.latency_ms ?? 0} ms`
+      : `${tr('about.sourceOffline')}${src.http_status ? ` (${src.http_status})` : ''}`;
+    const badge = node('span', `source-status ${isUp ? 'reachable' : 'unavailable'}`, statusLabel);
+    item.append(main, badge);
+    listEl.append(item);
+  });
 }
 
 function renderAbout() {
   const root = $('#about-container');
   if (!root) return;
+  if (document.activeElement?.id === 'about-source-search') {
+    populateAboutSourcesList($('#about-sources-list'), $('#about-source-filters'), $('#about-sources-summary'));
+    return;
+  }
   root.replaceChildren();
+
+  const topGrid = node('div', 'about-top-grid');
 
   const methodSec = node('section', 'settings-group');
   methodSec.append(node('p', 'about-eyebrow', tr('about.methodEyebrow')));
@@ -1064,9 +1235,10 @@ function renderAbout() {
   });
   methodSec.append(mList);
   methodSec.append(node('p', 'about-tip', tr('about.waitTip')));
-  root.append(methodSec);
+  topGrid.append(methodSec);
 
   const riskSec = node('section', 'settings-group');
+  riskSec.append(node('p', 'about-eyebrow', tr('drivers.rec')));
   riskSec.append(node('h2', '', tr('about.riskTitle')));
   riskSec.append(node('p', 'about-lead', tr('about.riskCopy')));
   const rList = node('ul', 'method-list');
@@ -1082,19 +1254,55 @@ function renderAbout() {
     rList.append(li);
   });
   riskSec.append(rList);
-  root.append(riskSec);
+  topGrid.append(riskSec);
+  root.append(topGrid);
+
+  const sourcesSec = node('section', 'settings-group');
+  sourcesSec.id = 'about-sources-card';
+  const sHead = node('div', 'sources-head');
+  const sTitleWrap = node('div');
+  sTitleWrap.append(node('p', 'about-eyebrow', tr('about.sourcesEyebrow')), node('h2', '', tr('about.sourcesTitle')));
+  const summaryEl = node('p', '', '');
+  summaryEl.id = 'about-sources-summary';
+  sTitleWrap.append(summaryEl);
+  sHead.append(sTitleWrap);
+  sourcesSec.append(sHead);
+
+  const sToolbar = node('div', 'toolbar');
+  const filtersEl = node('div', 'filter-pills');
+  filtersEl.id = 'about-source-filters';
+  const searchInput = node('input', 'search-input');
+  searchInput.id = 'about-source-search';
+  searchInput.type = 'search';
+  searchInput.placeholder = tr('about.sourcesSearch');
+  searchInput.value = aboutSourceSearch;
+  const listEl = node('div', 'sources-grid');
+  listEl.id = 'about-sources-list';
+  searchInput.addEventListener('input', () => {
+    aboutSourceSearch = searchInput.value || '';
+    populateAboutSourcesList(listEl, filtersEl, summaryEl);
+  });
+  sToolbar.append(filtersEl, searchInput);
+  sourcesSec.append(sToolbar, listEl);
+  populateAboutSourcesList(listEl, filtersEl, summaryEl);
+  root.append(sourcesSec);
 
   const appSec = node('section', 'settings-group');
-  appSec.append(node('h2', '', tr('about.appGroup')));
-  appSec.append(node('p', 'about-lead', tr('about.appDesc')));
+  const appRow = node('div', 'app-meta-row');
+  const appLeft = node('div');
+  appLeft.append(node('h2', '', tr('about.appGroup')), node('p', 'about-lead', tr('about.appDesc')));
   const baseUrl = currentSettings?.apiBaseUrl || 'https://optlabs.com.br/driveradar';
-  const dl = node('dl', 'dl-grid');
+  const statsStrip = node('div', 'app-stats-strip');
   [
-    [tr('about.version'), `v${currentAppInfo?.version || '1.3.0'}`],
+    [tr('about.version'), `v${currentAppInfo?.version || '1.6.0'}`],
     [tr('about.platform'), currentAppInfo?.platform === 'win32' ? 'Windows (Electron)' : (currentAppInfo?.platform || 'Windows')],
     [tr('about.server'), baseUrl]
-  ].forEach(([k, v]) => dl.append(node('dt', '', k), node('dd', '', v)));
-  appSec.append(dl);
+  ].forEach(([k, v]) => {
+    const st = node('div', 'app-stat');
+    st.append(node('small', '', k), node('strong', '', v));
+    statsStrip.append(st);
+  });
+  appLeft.append(statsStrip);
 
   const links = node('div', 'about-links');
   [
@@ -1107,7 +1315,8 @@ function renderAbout() {
     btn.addEventListener('click', () => window.driveRadar.openExternal(href));
     links.append(btn);
   });
-  appSec.append(links);
+  appRow.append(appLeft, links);
+  appSec.append(appRow);
   root.append(appSec);
 }
 
@@ -1201,9 +1410,11 @@ function renderAll(data) {
   currentData = data;
   renderSyncMeta(data);
   if (!data) return;
+  updateNavBadges(data);
   renderDrivers(data);
   renderHistory(data);
   renderAlerts(data);
+  renderAbout();
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
