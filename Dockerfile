@@ -16,6 +16,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py api.py advisor.py monitor.py service.py sources.py force_sync.py ./
+COPY radar_core ./radar_core
 COPY static ./static
 RUN mkdir -p /app/cache && chown -R driveradar:driveradar /app/cache
 

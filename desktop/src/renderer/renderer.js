@@ -16,6 +16,114 @@ let activeHistoryVendor = 'all';
 let historySearch = '';
 let activeAlertVendor = 'all';
 let toastTimer = null;
+let voteState = { token: '', issuedAt: 0, tallies: {}, myVotes: {}, pending: new Set() };
+const DRIVER_DOWN_TAGS = [
+  ['black_screen', 'vote.tag.black_screen'],
+  ['crash_bsod', 'vote.tag.crash_bsod'],
+  ['fps_drop', 'vote.tag.fps_drop'],
+  ['install_fail', 'vote.tag.install_fail'],
+  ['audio_display', 'vote.tag.audio_display']
+];
+
+async function refreshVoteSession() {
+  try {
+    const res = await window.driveRadar.getVoteSession();
+    if (!res) return;
+    voteState.token = res.vote_token || '';
+    voteState.issuedAt = Date.now();
+    voteState.tallies = { ...voteState.tallies, ...(res.tallies || {}) };
+    voteState.myVotes = { ...voteState.myVotes, ...(res.my_votes || {}) };
+    if (currentData) {
+      renderDrivers(currentData);
+      renderAlerts(currentData);
+    }
+  } catch (_) {}
+}
+
+async function submitDesktopVote(targetType, targetId, vote, reasonTag) {
+  const key = `${targetType}:${targetId}`;
+  if (voteState.pending.has(key)) return;
+  voteState.pending.add(key);
+  try {
+    if (!voteState.token) await refreshVoteSession();
+    const elapsed = Date.now() - voteState.issuedAt;
+    if (elapsed < 1150) {
+      await new Promise((resolve) => setTimeout(resolve, 1150 - elapsed));
+    }
+    let out = await window.driveRadar.castVote({
+      vote_token: voteState.token,
+      target_type: targetType,
+      target_id: targetId,
+      vote,
+      reason_tag: reasonTag || null
+    });
+    if (out?.error === 403) {
+      await refreshVoteSession();
+      await new Promise((resolve) => setTimeout(resolve, 1150));
+      out = await window.driveRadar.castVote({
+        vote_token: voteState.token,
+        target_type: targetType,
+        target_id: targetId,
+        vote,
+        reason_tag: reasonTag || null
+      });
+    }
+    if (out?.tally) voteState.tallies[key] = out.tally;
+    if (out?.my_vote) voteState.myVotes[key] = out.my_vote;
+    if (currentData) {
+      renderDrivers(currentData);
+      renderAlerts(currentData);
+    }
+  } finally {
+    voteState.pending.delete(key);
+  }
+}
+
+function buildDriverVoteBar(vendor, version, initialCommunity) {
+  const targetId = `${vendor}:${version}`;
+  const key = `driver:${targetId}`;
+  const tally = voteState.tallies[key] || initialCommunity || { up: 0, down: 0, total: 0, quorum_met: false, signal: 'insufficient' };
+  const myVote = voteState.myVotes[key] || null;
+  const box = node('div', 'community-bar');
+  const row = node('div', 'community-row');
+  const info = node('div', 'community-info');
+  const total = Number(tally.total || 0);
+  const summaryText = total === 0
+    ? tr('vote.noVotesYet')
+    : !tally.quorum_met
+      ? tr('vote.formingSample', { count: total })
+      : tr('vote.driverStats', { pct: tally.approval_pct ?? 0, count: total });
+  info.append(node('small', 'community-eyebrow', tr('vote.driverTitle')), node('span', 'community-summary', summaryText));
+  if (tally.signal === 'warning') {
+    const issueLbl = tally.top_issue ? tr(`vote.tag.${tally.top_issue}`) : '';
+    info.append(node('span', 'community-warn-pill', tr('vote.communityWarning', { issue: issueLbl })));
+  }
+  const actions = node('div', 'vote-actions');
+  const upBtn = node('button', `vote-btn up${myVote?.vote === 'up' ? ' active' : ''}`, `👍 ${tr('vote.stableBtn')} (${tally.up || 0})`);
+  upBtn.type = 'button';
+  const downBtn = node('button', `vote-btn down${myVote?.vote === 'down' ? ' active' : ''}`, `👎 ${tr('vote.issueBtn')} (${tally.down || 0})`);
+  downBtn.type = 'button';
+  actions.append(upBtn, downBtn);
+  row.append(info, actions);
+  box.append(row);
+
+  const picker = node('div', 'vote-tags-picker');
+  picker.hidden = true;
+  picker.append(node('small', '', tr('vote.pickSymptom')));
+  const pills = node('div', 'vote-tag-pills');
+  DRIVER_DOWN_TAGS.forEach(([tagCode, lblKey]) => {
+    const tBtn = node('button', `vote-tag-btn${myVote?.tag === tagCode ? ' active' : ''}`, tr(lblKey));
+    tBtn.type = 'button';
+    tBtn.addEventListener('click', () => submitDesktopVote('driver', targetId, 'down', tagCode));
+    pills.append(tBtn);
+  });
+  picker.append(pills);
+  box.append(picker);
+
+  upBtn.addEventListener('click', () => submitDesktopVote('driver', targetId, 'up', 'stable'));
+  downBtn.addEventListener('click', () => { picker.hidden = !picker.hidden; });
+  return box;
+}
 
 function activeLang() {
   return I18N.resolveLang(currentSettings?.language || 'system', currentAppInfo?.systemLocale || navigator.language);
@@ -262,10 +370,9 @@ function renderDrivers(data) {
     verRow.append(node('small', '', metaParts.join(' · ')));
     card.append(verRow);
 
-    const meter = node('div', 'meter');
-    const fill = node('span', tone);
-    fill.style.width = `${Math.max(2, score)}%`;
-    meter.append(fill);
+    const meter = node('progress', `meter-progress ${tone}`.trim());
+    meter.max = 100;
+    meter.value = Math.max(2, score);
     card.append(meter);
 
     if (item.verdict_change && item.verdict_change.from_action && item.verdict_change.to_action) {
@@ -286,10 +393,9 @@ function renderDrivers(data) {
         node('strong', '', tr('drivers.soakTitle', { day: maturity.soak_day || 1, total: maturity.window_days || 4, pct })),
         node('span', '', tr('drivers.freshRelease', { hours: remHours }))
       );
-      const bar = node('div', 'soak-meter');
-      const barFill = node('span');
-      barFill.style.width = `${pct}%`;
-      bar.append(barFill);
+      const bar = node('progress', 'meter-progress soak');
+      bar.max = 100;
+      bar.value = pct;
       callout.append(bar);
       card.append(callout);
     }
@@ -380,6 +486,10 @@ function renderDrivers(data) {
       });
       details.append(chips);
       card.append(details);
+    }
+
+    if (item.version) {
+      card.append(buildDriverVoteBar(vendor, item.version, item.community));
     }
 
     const foot = node('div', 'card-foot');
@@ -612,8 +722,7 @@ function populateDialog(vendor, item, isLoading) {
   meta.append(dl);
   body.append(meta);
 
-  const foot = node('div', 'link-row');
-  foot.style.marginTop = '1rem';
+  const foot = node('div', 'link-row mt-1');
   if (item.release_notes_url) {
     const rn = node('button', 'link-btn', tr('dialog.officialNotes'));
     rn.type = 'button';
@@ -681,7 +790,11 @@ function renderAlerts(data) {
     info: tr('sev.info')
   };
   filtered.forEach((a) => {
-    const card = node('article', `alert-card ${a.severity || 'info'}`);
+    const aKey = a.id ? `alert:${a.id}` : '';
+    const tally = (aKey && voteState.tallies[aKey]) || a.community || { up: 0, down: 0, signal: 'insufficient' };
+    const myVote = aKey ? voteState.myVotes[aKey] : null;
+    const isFp = tally.signal === 'likely_false_positive';
+    const card = node('article', `alert-card ${a.severity || 'info'}${isFp ? ' likely-fp' : ''}`);
     const vendors = (a.vendors || []).map((v) => SHORT_LABELS[v] || v).join(', ') || 'General';
     card.append(node('div', 'meta', `${sevLabel[a.severity] || 'Info'} · ${vendors} · ${a.source} · ${formatDate(a.published_at)}`));
     const btn = node('button', 'title-btn', a.title || 'Alert');
@@ -689,6 +802,18 @@ function renderAlerts(data) {
     btn.addEventListener('click', () => window.driveRadar.openExternal(a.link));
     card.append(btn);
     if (a.summary) card.append(node('p', '', a.summary));
+    if (a.id) {
+      const vBar = node('div', 'alert-vote-bar');
+      if (isFp) vBar.append(node('span', 'risk-pill risk-moderate', tr('vote.flaggedFalsePos')));
+      const upBtn = node('button', `vote-btn compact up${myVote?.vote === 'up' ? ' active' : ''}`, `✓ ${tr('vote.alertUseful')} (${tally.up || 0})`);
+      upBtn.type = 'button';
+      const downBtn = node('button', `vote-btn compact down${myVote?.vote === 'down' ? ' active' : ''}`, `✕ ${tr('vote.alertFalsePos')} (${tally.down || 0})`);
+      downBtn.type = 'button';
+      upBtn.addEventListener('click', () => submitDesktopVote('alert', a.id, 'up', 'useful_alert'));
+      downBtn.addEventListener('click', () => submitDesktopVote('alert', a.id, 'down', 'false_positive'));
+      vBar.append(upBtn, downBtn);
+      card.append(vBar);
+    }
     list.append(card);
   });
 }
@@ -874,17 +999,15 @@ function renderSettings() {
   updBox.append(updInfo, updActions);
   gApp.append(updBox);
 
-  const adv = node('details');
-  adv.style.marginTop = '.75rem';
+  const adv = node('details', 'mt-sm');
   adv.append(node('summary', '', tr('settings.advApi')));
   const urlRow = node('div', 'setting-row');
   const uLbl = node('label');
   const feedback = node('small', 'api-feedback', '');
   uLbl.append(node('strong', '', tr('settings.apiBase')), node('small', '', tr('settings.apiBaseDesc')), feedback);
   const urlControls = node('div', 'api-url-controls');
-  const urlInput = node('input');
+  const urlInput = node('input', 'api-url-input');
   urlInput.type = 'url';
-  urlInput.style.width = '250px';
   urlInput.value = currentSettings.apiBaseUrl;
   const resetBtn = node('button', 'btn-outline', tr('settings.apiReset'));
   resetBtn.type = 'button';
@@ -1054,6 +1177,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     const data = await window.driveRadar.getData();
     renderAll(data);
+    refreshVoteSession();
   } catch (_) {
     $('#sync-status').textContent = tr('sync.error');
   }

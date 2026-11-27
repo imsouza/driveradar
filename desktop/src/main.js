@@ -10,13 +10,21 @@ const {
   nativeImage,
   nativeTheme,
   net,
+  safeStorage,
+  session,
   shell
 } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const { SUPPORTED: SUPPORTED_LANGS, resolveLang, t } = require('./i18n');
+const {
+  DEFAULT_API_BASE,
+  IMMUTABLE_UPDATER_URL,
+  loadOrCreateVoterProof,
+  validateExternalBrowserUrl,
+  validateRemoteApiUrl
+} = require('./security');
 
 const APP_ID = 'br.com.optlabs.driveradar';
-const DEFAULT_API_BASE = 'https://optlabs.com.br/driveradar';
 const VENDORS = ['nvidia', 'amd', 'intel', 'windows'];
 const VENDOR_LABELS = {
   nvidia: 'NVIDIA GeForce',
@@ -59,6 +67,7 @@ let updateTimer = null;
 let settings = { ...DEFAULT_SETTINGS, vendors: { ...DEFAULT_SETTINGS.vendors } };
 let seenState = { seeded: false, versions: {}, verdicts: {}, conflicts: {}, alerts: [] };
 let cachedData = null;
+let voterProof = '';
 let updaterStatus = { state: 'idle', version: app.getVersion(), message: '' };
 
 function curLang() {
@@ -93,13 +102,8 @@ function sanitizeTime(value, fallback) {
 }
 
 function sanitizeApiBase(value) {
-  try {
-    const u = new URL(String(value || DEFAULT_API_BASE).trim());
-    if (!['http:', 'https:'].includes(u.protocol)) return DEFAULT_API_BASE;
-    return u.href.replace(/\/+$/, '');
-  } catch (_) {
-    return DEFAULT_API_BASE;
-  }
+  const checked = validateRemoteApiUrl(value, { allowInsecureDev: !app.isPackaged });
+  return checked.ok ? checked.url : DEFAULT_API_BASE;
 }
 
 function mergeSettings(raw) {
@@ -458,6 +462,9 @@ function setUpdaterState(next) {
 }
 
 function setupAutoUpdater() {
+  try {
+    autoUpdater.setFeedURL({ provider: 'generic', url: IMMUTABLE_UPDATER_URL });
+  } catch (_) {}
   autoUpdater.autoDownload = settings.autoDownloadUpdates;
   autoUpdater.autoInstallOnAppQuit = true;
 
@@ -533,7 +540,12 @@ function createWindow(startHidden) {
     }
   });
 
-  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  const indexFile = path.join(__dirname, 'renderer', 'index.html');
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', (event) => {
+    event.preventDefault();
+  });
+  mainWindow.loadFile(indexFile);
 
   mainWindow.on('focus', () => {
     if (hasUnreadAlert) {
@@ -600,20 +612,11 @@ function registerIpc() {
     return settings;
   });
   ipcMain.handle('settings:validateApi', async (_event, rawCandidate) => {
-    const trimmed = String(rawCandidate || '').trim();
-    if (!trimmed) {
-      return { ok: true, url: DEFAULT_API_BASE };
-    }
-    let parsed;
-    try {
-      parsed = new URL(trimmed);
-      if (!['http:', 'https:'].includes(parsed.protocol)) {
-        return { ok: false, error: msg('settings.apiInvalid') };
-      }
-    } catch (_) {
+    const checked = validateRemoteApiUrl(rawCandidate, { allowInsecureDev: !app.isPackaged });
+    if (!checked.ok) {
       return { ok: false, error: msg('settings.apiInvalid') };
     }
-    const cleanUrl = parsed.href.replace(/\/+$/, '');
+    const cleanUrl = checked.url;
     try {
       const resp = await net.fetch(`${cleanUrl}/health`, {
         headers: { Accept: 'application/json' },
@@ -628,6 +631,40 @@ function registerIpc() {
     } catch (_) {
       return { ok: false, error: msg('settings.apiInvalid') };
     }
+  });
+  ipcMain.handle('votes:session', async () => {
+    const resp = await net.fetch(`${settings.apiBaseUrl}/api/votes`, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'X-DriveRadar-Client-Proof': voterProof
+      },
+      signal: AbortSignal.timeout(10_000)
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp.json();
+  });
+  ipcMain.handle('votes:cast', async (_event, payload) => {
+    if (!payload || typeof payload !== 'object') throw new Error('Invalid vote payload');
+    const resp = await net.fetch(`${settings.apiBaseUrl}/api/vote`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'X-Requested-With': 'DriveRadar',
+        'X-DriveRadar-Client-Proof': voterProof
+      },
+      body: JSON.stringify({
+        vote_token: String(payload.vote_token || ''),
+        target_type: String(payload.target_type || ''),
+        target_id: String(payload.target_id || ''),
+        vote: String(payload.vote || ''),
+        reason_tag: payload.reason_tag || null
+      }),
+      signal: AbortSignal.timeout(10_000)
+    });
+    if (!resp.ok) return { error: resp.status };
+    return resp.json();
   });
   ipcMain.handle('notify:test', () => {
     fireNotification(msg('notif.testTitle'), msg('notif.testBody'), () => showWindow('settings'));
@@ -655,14 +692,10 @@ function registerIpc() {
     return true;
   });
   ipcMain.handle('shell:openExternal', (_event, rawUrl) => {
-    try {
-      const parsed = new URL(String(rawUrl || ''));
-      if (!['http:', 'https:'].includes(parsed.protocol)) return false;
-      shell.openExternal(parsed.href);
-      return true;
-    } catch (_) {
-      return false;
-    }
+    const safeHref = validateExternalBrowserUrl(rawUrl);
+    if (!safeHref) return false;
+    shell.openExternal(safeHref);
+    return true;
   });
 }
 
@@ -673,7 +706,10 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', () => showWindow());
 
   app.whenReady().then(() => {
+    session.defaultSession.setPermissionRequestHandler((_wc, _perm, callback) => callback(false));
+    session.defaultSession.setPermissionCheckHandler(() => false);
     settings = mergeSettings(readJson(userFile('settings.json'), DEFAULT_SETTINGS));
+    voterProof = loadOrCreateVoterProof(safeStorage, userFile('voter_proof.json'));
     seenState = { ...seenState, ...readJson(userFile('state.json'), {}) };
     cachedData = readJson(userFile('last_data.json'), null);
     applyThemeSetting();

@@ -151,6 +151,7 @@ function node(tag, className, text) {
 function safeUrl(value) {
   try {
     const url = new URL(value, window.location.origin);
+    if (url.username || url.password) return '#';
     return ['http:', 'https:'].includes(url.protocol) ? url.href : '#';
   } catch (_) {
     return '#';
@@ -541,6 +542,11 @@ function renderDriver(vendor, data, assessment, advisorStatus) {
   });
   card.append(facts);
 
+  if (window.DriveRadarVotes && data.version) {
+    const voteBar = window.DriveRadarVotes.renderDriverVoteBar(vendor, data.version, data.community);
+    if (voteBar) card.append(voteBar);
+  }
+
   const actions = node('div', 'card-actions');
   const links = node('div', 'card-action-links');
   links.append(externalLink(vendor === 'windows' ? tr('card.officialUpdate') : tr('card.officialDownload'), data.official_url, 'primary-link'));
@@ -642,6 +648,10 @@ function renderAlerts(alerts) {
     if (alert.summary) body.append(node('p', 'alert-summary', alert.summary));
     const rel = relativeDaysLabel(alert.published_at);
     body.append(node('small', '', `${alert.source || 'External'} · ${formatDate(alert.published_at)}${rel ? ` (${rel})` : ''}`));
+    if (window.DriveRadarVotes && alert.id) {
+      const alertVotes = window.DriveRadarVotes.renderAlertVoteBar(alert);
+      if (alertVotes) body.append(alertVotes);
+    }
     item.append(body);
     container.append(item);
   });
@@ -1308,6 +1318,9 @@ async function loadData(isManual = false) {
     const data = await response.json();
     latestData = data;
     renderAll(data);
+    if (window.DriveRadarVotes) {
+      window.DriveRadarVotes.refreshSession();
+    }
     await notifyChanges(data);
     ['drivers-section', 'alerts-section', 'history-section', 'sources-section'].forEach((id) => { document.getElementById(id).hidden = false; });
     $('#loading').hidden = true;

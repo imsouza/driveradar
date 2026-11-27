@@ -40,9 +40,11 @@ jobs:
         working-directory: desktop
         run: npm ci --no-audit --no-fund
 
-      - name: Syntax check desktop scripts
+      - name: Syntax check & supply-chain audit desktop scripts
         working-directory: desktop
-        run: npm run check
+        run: |
+          npm run check
+          npm audit --audit-level=high
 
       - name: Build Windows installer and portable binary
         working-directory: desktop
@@ -62,9 +64,9 @@ jobs:
           body: |
             ## DriveRadar Desktop for Windows (${{ github.ref_name }})
 
-            - **Deterministic 96-Hour Soak Engine (`Observing`)**: Newly released drivers stay in `Observing` mode for 4 days (`96h`) with a live soak progress bar instead of premature green `Install` badges, escalating immediately to `Critical` if severe post-launch regressions emerge.
-            - **Post-Release Risk Escalation Alerts**: Native Windows notifications and verdict-change badges alert you immediately if an already-released driver escalates to `Critical` or `High` days after launch.
-            - **Full Card, Modal & Tray Parity**: System tray `[CRITICAL]` / `[OBSERVING]` tags, dynamic tooltip, Crossover point breakdown, grounded signals, verdict transition history, SHA-256 copy button, and `/health`-validated API endpoint settings with one-click reset.
+            - **Dual-Track Community Validation**: Upvote/downvote drivers (*Stable* vs. *Had issues* with structured symptom tags) and security alerts (*Useful* vs. *False positive*) directly from Windows Desktop or Web — backed by Wilson confidence intervals, `/24` & `/64` subnet Sybil protection, and a strict Zero-Override rule that never weakens deterministic `Critical` or 96h `Observing` verdicts.
+            - **End-to-End Security Hardening**: Strict renderer CSP (`style-src 'self'; connect-src 'none'`), Windows DPAPI (`safeStorage`) encrypted voter proofs, HTTPS + SSRF private-IP guards on custom API endpoints, denied permission/navigation handlers, and zero npm supply-chain vulnerabilities.
+            - **Deterministic 96-Hour Soak Engine & Escalation Alerts**: Newly released drivers stay in `Observing` mode for 96h with a live progress bar and trigger native Windows notifications if a driver escalates to `Critical` or `High` post-launch.
             - **Installer (`DriveRadar-Setup-*.exe`) & Portable (`DriveRadar-Portable-*.exe`)**: Automatic background updates via `https://optlabs.com.br/driveradar/updates/`, 4 languages (`en`, `pt-BR`, `es`, `fr`), and 6 curated themes + OS sync.
           files: |
             desktop/dist/latest.yml

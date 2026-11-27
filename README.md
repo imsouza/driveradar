@@ -32,6 +32,27 @@ Each verified release runs through AI evidence synthesis, multi-source corrobora
 
 - **Verdict Transition History & Escalation Alerts**: Every status transition (`observe → do_not_install`, `install → do_not_install`, `observe → install`) is persisted in `verdict_history`. If a previously seen version escalates to `Critical` or `High` days after launch, both the Web dashboard and Windows Desktop app surface a post-release warning banner and fire an urgent notification.
 
+## Clean Architecture & Dual-Track Community Validation
+
+Core domain rules, security policies, and community telemetry live in `radar_core/` following strict Clean Architecture dependency boundaries:
+
+- **`radar_core/domain/`**: Immutable value objects (`VoteCommand`, `CommunityTally`), Wilson lower-bound confidence intervals (`WilsonScoreCalculator`), quorum policies (`CommunityQuorumPolicy`), SSRF destination policies (`SafeExternalUrlPolicy`), and LLM prompt-injection sanitizers (`PromptInjectionSanitizer`).
+- **`radar_core/application/`**: `CommunityValidationService` orchestrating signed voter proofs, time-gated challenge tokens, `/24` IPv4 & `/64` IPv6 subnet Sybil caps, and Dual-Track snapshot enrichment.
+- **`radar_core/infrastructure/`**: WAL-mode SQLite persistence (`SqliteVoteRepository`), HMAC-SHA256 token signing & monthly-rotated privacy hashes (`HmacTokenSigner`), bounded sliding-window rate limiting (`SlidingWindowRateLimiter`), and HTTP security headers / streaming byte caps (`http_security.py`).
+
+### Dual-Track / Zero-Override Invariant
+
+Users on both **Web** and **Windows Desktop** can validate Drivers/KBs (*Stable* vs. *Had issues* with structured enum tags: `black_screen`, `crash_tdr`, `fps_stutter`, `install_boot`, `other`) and Security Alerts (*Useful* vs. *False positive*):
+
+- Crowd feedback is projected in a dedicated `community` track (`GET /driveradar/api/votes`, `POST /driveradar/api/vote`) and **never** overrides deterministic Crossover verification scores, **never** bypasses the 96-hour soak quarantine, and **never** downgrades confirmed `Critical` (`do_not_install`) verdicts.
+- Zero free-text user input is accepted or rendered, eliminating stored XSS and LLM prompt-injection vectors.
+
+## Security Hardening
+
+- **Container Isolation**: `read_only: true` root filesystem, `cap_drop: ["ALL"]`, `no-new-privileges:true`, `noexec` `/tmp` tmpfs, memory/PID limits, and file-mounted Docker secrets (`chmod 600`).
+- **HTTP & Network Defense**: Strict `HSTS`, `CSP` (`object-src 'none'`, `frame-ancestors 'none'`), `COOP`, `CORP`, `Permissions-Policy`, SSRF DNS/IP destination validation, streaming byte/time caps, CSRF header + `SameSite=Strict` cookie checks, and Nginx payload caps (`client_max_body_size 16k`).
+- **Electron Desktop Hardening**: Renderer `style-src 'self'` & `connect-src 'none'` CSP (zero inline styles/scripts), denied navigation/popups/permissions, HTTPS + public-host enforcement on custom API endpoints, immutable auto-updater feed URL, and OS-encrypted voter proofs via Windows DPAPI (`safeStorage`).
+
 ## AI Provider Pool & Failover
 
 Textual assessments and historical release summaries use a JSON-validated failover pool grounded strictly in collected evidence IDs:
@@ -81,6 +102,7 @@ Optional environment variables:
 - `API_ALLOWED_ORIGINS`: Allowed CORS origins for the internal API.
 - `APP_UID` / `APP_GID`: Non-privileged container user IDs.
 - `GEMINI_API_KEY_FILE`: Path to Gemini secret file (default `/run/secrets/gemini_api_key`).
+- `VOTE_HMAC_SECRET_FILE`: Path to HMAC secret file signing anonymous voter proofs and monthly subnet salts (default `/run/secrets/vote_hmac_secret`).
 - `GEMINI_MODELS`: Comma-separated ordered list of Gemini model IDs.
 - `OPENCODE_ZEN_MODELS` / `OPENCODE_ZEN_API_KEY_FILE`: Optional OpenCode Zen fallback settings.
 - `NVIDIA_API_KEY_FILE`: Optional NVIDIA NIM fallback secret path.
@@ -89,7 +111,7 @@ Optional environment variables:
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
-node --check static/js/i18n.js && node --check static/js/app.js && node --check static/js/legal.js
-(cd desktop && npm run check)
+node --check static/js/i18n.js && node --check static/js/votes.js && node --check static/js/app.js && node --check static/js/legal.js
+(cd desktop && npm run check && npm audit --audit-level=high)
 docker compose config -q
 ```

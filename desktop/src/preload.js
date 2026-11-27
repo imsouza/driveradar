@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('driveRadar', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (partial) => ipcRenderer.invoke('settings:save', partial),
   validateApiEndpoint: (url) => ipcRenderer.invoke('settings:validateApi', url),
+  getVoteSession: () => ipcRenderer.invoke('votes:session'),
+  castVote: (payload) => ipcRenderer.invoke('votes:cast', payload),
   testNotification: () => ipcRenderer.invoke('notify:test'),
   getAppInfo: () => ipcRenderer.invoke('app:info'),
   checkAppUpdates: () => ipcRenderer.invoke('updater:check'),

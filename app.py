@@ -3,24 +3,41 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
+import urllib.parse
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from radar_core.domain.models import (
+    DomainValidationError,
+    RateLimitExceededError,
+    SecurityViolationError,
+)
+from radar_core.infrastructure.http_security import (
+    WEB_CSP,
+    TrustedProxyIpExtractor,
+    apply_security_headers,
+)
+from radar_core.infrastructure.rate_limiter import SlidingWindowRateLimiter
 from service import SUPPORTED_LANGS, VENDORS, DriveRadarService, localize_history_entry, localize_payload
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 service = DriveRadarService()
+http_limiter = SlidingWindowRateLimiter()
 ADSENSE_PUBLISHER_ID = "pub-7513394193260475"
 RELEASES_DIR = Path(os.getenv("RELEASES_DIR", "releases"))
+VOTER_COOKIE_NAME = "dr_vid"
+MAX_VOTE_BODY_BYTES = 512
 _UPDATE_FILE_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_STRICT_VERSION_RE = re.compile(r"^[A-Za-z0-9._-]{1,40}$")
 _UPDATE_ALLOWED_EXTS = {".yml", ".yaml", ".exe", ".blockmap", ".zip", ".sha256"}
 
 
@@ -42,23 +59,39 @@ web = FastAPI(title="DriveRadar Web", docs_url=None, redoc_url=None, openapi_url
 @app.middleware("http")
 async def security_headers(request, call_next):
     response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; script-src 'self' 'sha256-63iNIim4dZEEKxCEopD9h2k4I2qtvaNcOChCVyzU7pw=' "
-        "https://pagead2.googlesyndication.com https://www.googletagservices.com "
-        "https://www.googletagmanager.com; "
-        "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data: https://*.googlesyndication.com https://*.doubleclick.net https://*.google.com; "
-        "connect-src 'self' https://*.googlesyndication.com https://*.doubleclick.net https://*.google.com "
-        "https://*.google-analytics.com https://*.analytics.google.com https://www.googletagmanager.com; "
-        "frame-src https://*.googlesyndication.com https://*.doubleclick.net; "
-        "worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; "
-        "form-action 'self'"
+    return apply_security_headers(response, csp=WEB_CSP)
+
+
+def _enforce_same_origin_csrf(request: Request, *, has_desktop_proof: bool) -> None:
+    if request.headers.get("x-requested-with") != "DriveRadar":
+        raise SecurityViolationError("Missing anti-CSRF header")
+    if has_desktop_proof:
+        return
+    sec_site = str(request.headers.get("sec-fetch-site") or "").strip().lower()
+    if sec_site and sec_site not in {"same-origin", "none"}:
+        raise SecurityViolationError("Cross-site vote request blocked")
+    origin = str(request.headers.get("origin") or "").strip()
+    if origin:
+        parsed_origin = urllib.parse.urlsplit(origin)
+        req_host = str(request.headers.get("host") or "").split(":")[0].lower()
+        if parsed_origin.hostname and req_host and parsed_origin.hostname.lower() != req_host:
+            raise SecurityViolationError("Origin mismatch")
+
+
+def _set_voter_cookie(response: Response, signed_cookie: str, request: Request) -> None:
+    is_https = (
+        request.url.scheme == "https"
+        or str(request.headers.get("x-forwarded-proto") or "").lower() == "https"
     )
-    return response
+    response.set_cookie(
+        key=VOTER_COOKIE_NAME,
+        value=signed_cookie,
+        max_age=365 * 86400,
+        path="/driveradar",
+        secure=is_https,
+        httponly=True,
+        samesite="strict",
+    )
 
 
 @web.get("/api/data")
@@ -68,13 +101,100 @@ async def get_data(response: Response, lang: str | None = None):
     return localize_payload(payload, lang)
 
 
+@web.get("/api/votes")
+async def get_votes_session(request: Request, response: Response):
+    response.headers["Cache-Control"] = "private, no-store"
+    client_ip = TrustedProxyIpExtractor.extract(request)
+    decision = http_limiter.check(f"votes-session:{client_ip}", limit=60, window_seconds=60)
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded",
+            headers={"Retry-After": str(decision.retry_after_seconds)},
+        )
+    voter_hash, subnet_hash, new_cookie = service.votes.resolve_identity(
+        cookie_value=request.cookies.get(VOTER_COOKIE_NAME),
+        desktop_proof=request.headers.get("x-driveradar-client-proof"),
+        client_ip=client_ip,
+    )
+    if new_cookie:
+        _set_voter_cookie(response, new_cookie, request)
+    snapshot = service._cache or await service.get_data()
+    return await asyncio.to_thread(
+        service.votes.open_session,
+        voter_hash=voter_hash,
+        subnet_hash=subnet_hash,
+        snapshot_payload=snapshot,
+    )
+
+
+@web.post("/api/vote")
+async def submit_vote(request: Request, response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    desktop_proof = request.headers.get("x-driveradar-client-proof")
+    try:
+        _enforce_same_origin_csrf(request, has_desktop_proof=bool(desktop_proof))
+        raw_body = await request.body()
+        if len(raw_body) > MAX_VOTE_BODY_BYTES:
+            raise DomainValidationError("Payload exceeds 512-byte limit")
+        try:
+            body = json.loads(raw_body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise DomainValidationError("Invalid JSON payload") from exc
+        if not isinstance(body, dict):
+            raise DomainValidationError("Payload must be an object")
+
+        client_ip = TrustedProxyIpExtractor.extract(request)
+        voter_hash, subnet_hash, new_cookie = service.votes.resolve_identity(
+            cookie_value=request.cookies.get(VOTER_COOKIE_NAME),
+            desktop_proof=desktop_proof,
+            client_ip=client_ip,
+        )
+        if new_cookie:
+            _set_voter_cookie(response, new_cookie, request)
+
+        snapshot = service._cache or await service.get_data()
+        return await asyncio.to_thread(
+            service.votes.cast_vote,
+            voter_hash=voter_hash,
+            subnet_hash=subnet_hash,
+            vote_token=str(body.get("vote_token") or ""),
+            target_type=str(body.get("target_type") or ""),
+            target_id=str(body.get("target_id") or ""),
+            vote=str(body.get("vote") or ""),
+            reason_tag=body.get("reason_tag"),
+            snapshot_payload=snapshot,
+        )
+    except DomainValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SecurityViolationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except RateLimitExceededError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+
+
 @web.get("/api/history/{vendor}/{version:path}")
-async def get_history_entry(vendor: str, version: str, response: Response, lang: str = "pt-BR"):
+async def get_history_entry(vendor: str, version: str, request: Request, response: Response, lang: str = "pt-BR"):
     clean_vendor = vendor.strip().lower()
     if clean_vendor not in VENDORS:
         raise HTTPException(status_code=404, detail="Vendor not found")
+    clean_version = version.strip()
+    if not _STRICT_VERSION_RE.fullmatch(clean_version) or ".." in clean_version:
+        raise HTTPException(status_code=400, detail="Invalid version format")
+    client_ip = TrustedProxyIpExtractor.extract(request)
+    decision = http_limiter.check(f"history:{client_ip}", limit=40, window_seconds=60)
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded",
+            headers={"Retry-After": str(decision.retry_after_seconds)},
+        )
     clean_lang = lang.strip() if lang and lang.strip() in SUPPORTED_LANGS else "pt-BR"
-    entry = await service.enrich_history_entry(clean_vendor, version.strip(), lang=clean_lang)
+    entry = await service.enrich_history_entry(clean_vendor, clean_version, lang=clean_lang)
     if not entry:
         raise HTTPException(status_code=404, detail="History version not found")
     response.headers["Cache-Control"] = "public, max-age=300"

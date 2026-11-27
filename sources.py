@@ -18,6 +18,9 @@ import feedparser
 import requests
 from bs4 import BeautifulSoup
 
+from radar_core.domain.models import SecurityViolationError
+from radar_core.domain.policies import AlertTargetIdBuilder, SafeExternalUrlPolicy
+
 LOGGER = logging.getLogger(__name__)
 MAX_SOURCE_BYTES = 1_500_000
 SOURCE_TIMEOUT = (4, 10)
@@ -408,12 +411,16 @@ class SourceHub:
         if cached_http.get("last_modified"):
             headers["If-Modified-Since"] = str(cached_http["last_modified"])
         try:
+            SafeExternalUrlPolicy.verify_public_destination(source.url)
             response = requests.get(
                 source.url,
                 headers=headers,
                 timeout=SOURCE_TIMEOUT,
                 stream=True,
             )
+            final_url = getattr(response, "url", None)
+            if final_url:
+                SafeExternalUrlPolicy.verify_public_destination(str(final_url))
             if response.status_code == 304 and "documents" in cached_http and "alerts" in cached_http:
                 documents = cached_http["documents"]
                 alerts = cached_http["alerts"]
@@ -469,11 +476,11 @@ class SourceHub:
                 "documents": documents,
                 "error": None,
             }
-        except requests.RequestException as exc:
+        except (requests.RequestException, SecurityViolationError) as exc:
             return {
                 "source": source,
                 "status": "unavailable",
-                "http_status": getattr(exc.response, "status_code", None),
+                "http_status": getattr(getattr(exc, "response", None), "status_code", None),
                 "latency_ms": round((time.monotonic() - started) * 1000),
                 "matched_versions": {},
                 "alerts": [],
@@ -532,7 +539,7 @@ class SourceHub:
                     if pub_dt and pub_dt < cutoff_dt:
                         continue
                     vendors = _match_vendors(combined)
-                    alerts.append({
+                    alert_item = {
                         "title": title,
                         "summary": summary,
                         "link": f"https://nvd.nist.gov/vuln/detail/{item.get('cveID')}",
@@ -540,7 +547,9 @@ class SourceHub:
                         "published_at": pub_dt.isoformat() if pub_dt else item.get("dateAdded"),
                         "vendors": vendors,
                         "severity": "critical",
-                    })
+                    }
+                    alert_item["id"] = AlertTargetIdBuilder.build(alert_item)
+                    alerts.append(alert_item)
                 return alerts[:5]
             except (json.JSONDecodeError, TypeError):
                 return []
@@ -557,7 +566,7 @@ class SourceHub:
             if pub_dt and pub_dt < cutoff_dt:
                 continue
             combined = f"{title} {summary}"
-            alerts.append({
+            alert_item = {
                 "title": title,
                 "summary": summary[:220],
                 "link": str(entry.get("link", ""))[:500],
@@ -565,7 +574,9 @@ class SourceHub:
                 "published_at": pub_dt.isoformat() if pub_dt else raw_pub,
                 "vendors": _match_vendors(combined),
                 "severity": _classify_alert_severity(combined, source),
-            })
+            }
+            alert_item["id"] = AlertTargetIdBuilder.build(alert_item)
+            alerts.append(alert_item)
             if len(alerts) == 4:
                 break
         return alerts

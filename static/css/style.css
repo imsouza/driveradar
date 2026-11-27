@@ -554,6 +554,78 @@ h1 {
 .chip.muted { opacity: .7; }
 
 .card-actions { gap: .8rem; margin-top: auto; padding-top: .3rem; flex-wrap: wrap; justify-content: space-between; }
+.community-bar {
+  margin: .2rem 0 .85rem;
+  padding: .62rem .75rem;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+.community-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .65rem;
+  flex-wrap: wrap;
+}
+.community-info { display: flex; flex-direction: column; gap: .12rem; }
+.community-eyebrow {
+  font-size: .58rem;
+  font-weight: 750;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.community-summary { font-size: .74rem; color: var(--text); font-weight: 600; }
+.community-warn-pill {
+  display: inline-block;
+  margin-top: .18rem;
+  font-size: .68rem;
+  font-weight: 700;
+  color: var(--amber);
+}
+.vote-actions { display: inline-flex; gap: .38rem; flex-wrap: wrap; }
+.vote-btn {
+  padding: .26rem .58rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: .7rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.vote-btn.compact { padding: .18rem .46rem; font-size: .66rem; }
+.vote-btn.up:hover, .vote-btn.up.active { border-color: var(--teal); color: var(--teal); }
+.vote-btn.down:hover, .vote-btn.down.active { border-color: var(--red); color: var(--red); }
+.vote-tags-picker {
+  margin-top: .55rem;
+  padding-top: .5rem;
+  border-top: 1px solid var(--line);
+}
+.vote-tags-picker > small { display: block; font-size: .66rem; color: var(--muted); margin-bottom: .35rem; }
+.vote-tag-pills { display: flex; flex-wrap: wrap; gap: .32rem; }
+.vote-tag-btn {
+  padding: .2rem .5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: .66rem;
+  cursor: pointer;
+}
+.vote-tag-btn:hover, .vote-tag-btn.active { border-color: var(--red); color: var(--red); }
+.alert-vote-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .38rem;
+  margin-top: .45rem;
+}
+.alert-item.likely-fp { opacity: .62; }
 .card-action-links { display: flex; flex-wrap: wrap; gap: .85rem; align-items: center; }
 .primary-link, .secondary-link { font-size: .76rem; font-weight: 650; text-decoration: none; }
 .primary-link { color: var(--teal); }

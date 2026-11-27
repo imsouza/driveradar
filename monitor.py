@@ -27,9 +27,15 @@ except ImportError:  # Local lightweight test environments may omit PDF support.
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from radar_core.domain.models import SecurityViolationError
+from radar_core.domain.policies import SafeExternalUrlPolicy
+from radar_core.infrastructure.http_security import fetch_bounded_bytes
+
 LOGGER = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = (5, 15)
+MAX_HTML_BYTES = 4_000_000
+MAX_PDF_BYTES = 14_000_000
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -465,7 +471,8 @@ class UpdateMonitor:
             return None
         headers = {"Referer": referer} if referer else None
         try:
-            resp = head_fn(url, headers=headers, timeout=(3, 6), allow_redirects=True)
+            safe_url = SafeExternalUrlPolicy.verify_public_destination(url)
+            resp = head_fn(safe_url, headers=headers, timeout=(3, 6), allow_redirects=True)
             if getattr(resp, "status_code", 500) >= 400:
                 return None
             raw_len = (getattr(resp, "headers", None) or {}).get("Content-Length")
@@ -477,10 +484,28 @@ class UpdateMonitor:
         except Exception:
             return None
 
+    def _get_text_bounded(
+        self, url: str, *, headers: dict[str, str] | None = None, max_bytes: int = MAX_HTML_BYTES
+    ) -> str:
+        raw_bytes, resp = fetch_bounded_bytes(
+            self.session, url, max_bytes=max_bytes, timeout=REQUEST_TIMEOUT, headers=headers
+        )
+        encoding = getattr(resp, "encoding", None) or "utf-8"
+        try:
+            return raw_bytes.decode(encoding, errors="replace")
+        except LookupError:
+            return raw_bytes.decode("utf-8", errors="replace")
+
+    def _get_bytes_bounded(
+        self, url: str, *, headers: dict[str, str] | None = None, max_bytes: int = MAX_PDF_BYTES
+    ) -> bytes:
+        raw_bytes, _ = fetch_bounded_bytes(
+            self.session, url, max_bytes=max_bytes, timeout=REQUEST_TIMEOUT, headers=headers
+        )
+        return raw_bytes
+
     def _get_soup(self, url: str) -> BeautifulSoup:
-        response = self.session.get(url, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        return BeautifulSoup(response.text, "html.parser")
+        return BeautifulSoup(self._get_text_bounded(url), "html.parser")
 
     def _fetch_nvidia_ajax(self, url: str = NVIDIA_AJAX_URL) -> list[dict[str, Any]]:
         try:
@@ -542,11 +567,10 @@ class UpdateMonitor:
         ])
         for url in dict.fromkeys(candidates):
             try:
-                response = self.session.get(url, timeout=REQUEST_TIMEOUT)
-                response.raise_for_status()
-                if version.encode() not in response.content and len(response.content) < 5000:
+                content = self._get_bytes_bounded(url, max_bytes=MAX_PDF_BYTES)
+                if version.encode() not in content and len(content) < 5000:
                     continue
-                notes_text = _extract_pdf_text(response.content)
+                notes_text = _extract_pdf_text(content)
                 structured = parse_release_notes_sections(notes_text, vendor="nvidia")
                 return url, notes_text, structured
             except Exception:
@@ -575,12 +599,11 @@ class UpdateMonitor:
         if vendor == "amd":
             slug = candidate.replace(".", "-")
             url = f"https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-{slug}.html"
-            response = self.session.get(url, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status()
-            if candidate not in response.text:
+            html_text = self._get_text_bounded(url)
+            if candidate not in html_text:
                 raise ValueError("amd official source did not confirm a current version")
-            notes_text = _extract_page_text(response.text)
-            structured = parse_release_notes_sections(notes_text, vendor="amd", html=response.text)
+            notes_text = _extract_page_text(html_text)
+            structured = parse_release_notes_sections(notes_text, vendor="amd", html=html_text)
             return {
                 "version": candidate,
                 "release_date": None,
@@ -595,9 +618,8 @@ class UpdateMonitor:
 
         if vendor == "intel":
             url = INTEL_CN_DOWNLOAD_URL
-            response = self.session.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, "html.parser")
+            html_text = self._get_text_bounded(url, headers={"User-Agent": "Mozilla/5.0"})
+            soup = BeautifulSoup(html_text, "html.parser")
             meta_ver = soup.find("meta", attrs={"name": "DownloadVersion"})
             meta_date = soup.find("meta", attrs={"name": "LastUpdate"}) or soup.find(
                 "meta", attrs={"name": "lastModifieddate"}
@@ -608,7 +630,7 @@ class UpdateMonitor:
                 if ver_match:
                     official_version = ver_match.group(0)
             if not official_version:
-                versions = list(dict.fromkeys(re.findall(r"32\.0\.101\.\d{4}", response.text)))
+                versions = list(dict.fromkeys(re.findall(r"32\.0\.101\.\d{4}", html_text)))
                 official_version = versions[0] if versions else ""
             if not official_version:
                 raise ValueError("intel official source did not confirm a current version")
@@ -618,7 +640,7 @@ class UpdateMonitor:
             short_version = official_version.removeprefix("32.0.")
             notes_match = re.search(
                 rf'https://downloadmirror\.intel\.com/\d+/ReleaseNotes_{re.escape(short_version)}_[^"\s<>]+\.pdf',
-                response.text,
+                html_text,
                 re.I,
             )
             notes_url = notes_match.group(0) if notes_match else url
@@ -626,9 +648,8 @@ class UpdateMonitor:
             structured: dict[str, list[str]] = {"highlights": [], "fixed_issues": [], "known_issues": []}
             if notes_match:
                 try:
-                    notes_response = self.session.get(notes_url, timeout=REQUEST_TIMEOUT)
-                    notes_response.raise_for_status()
-                    notes_text = _extract_pdf_text(notes_response.content)
+                    notes_bytes = self._get_bytes_bounded(notes_url, max_bytes=MAX_PDF_BYTES)
+                    notes_text = _extract_pdf_text(notes_bytes)
                     structured = parse_release_notes_sections(notes_text, vendor="intel")
                 except Exception as exc:
                     LOGGER.warning("Intel release notes PDF fetch failed: %s", type(exc).__name__)
@@ -775,9 +796,7 @@ class UpdateMonitor:
     def _get_amd_release(self) -> dict[str, Any]:
         tpu_url = TECHPOWERUP_URLS["amd"]
         try:
-            page_resp = self.session.get(AMD_DRIVER_PAGE_URL, timeout=REQUEST_TIMEOUT)
-            page_resp.raise_for_status()
-            html = page_resp.text
+            html = self._get_text_bounded(AMD_DRIVER_PAGE_URL)
             rev_match = re.search(
                 r"Adrenalin\s+(\d{2}\.\d{1,2}\.\d{1,2})\s+([^<\n]{0,40})",
                 html,
@@ -880,11 +899,8 @@ class UpdateMonitor:
     def _get_intel_release(self) -> dict[str, Any]:
         tpu_url = TECHPOWERUP_URLS["intel"]
         try:
-            response = self.session.get(
-                INTEL_CN_DOWNLOAD_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=REQUEST_TIMEOUT
-            )
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, "html.parser")
+            html_text = self._get_text_bounded(INTEL_CN_DOWNLOAD_URL, headers={"User-Agent": "Mozilla/5.0"})
+            soup = BeautifulSoup(html_text, "html.parser")
             meta_ver = soup.find("meta", attrs={"name": "DownloadVersion"})
             if not meta_ver or not meta_ver.get("content"):
                 raise ValueError("Intel official DownloadVersion meta tag absent")
@@ -902,7 +918,7 @@ class UpdateMonitor:
             short_version = version.removeprefix("32.0.")
             notes_match = re.search(
                 rf'https://downloadmirror\.intel\.com/\d+/ReleaseNotes_{re.escape(short_version)}_[^"\s<>]+\.pdf',
-                response.text,
+                html_text,
                 re.I,
             )
             notes_url = notes_match.group(0) if notes_match else INTEL_CN_DOWNLOAD_URL
@@ -910,9 +926,8 @@ class UpdateMonitor:
             structured: dict[str, list[str]] = {"highlights": [], "fixed_issues": [], "known_issues": []}
             if notes_match:
                 try:
-                    notes_response = self.session.get(notes_url, timeout=REQUEST_TIMEOUT)
-                    notes_response.raise_for_status()
-                    notes_text = _extract_pdf_text(notes_response.content)
+                    notes_bytes = self._get_bytes_bounded(notes_url, max_bytes=MAX_PDF_BYTES)
+                    notes_text = _extract_pdf_text(notes_bytes)
                     structured = parse_release_notes_sections(notes_text, vendor="intel")
                 except Exception as exc:
                     LOGGER.warning("Intel release notes PDF fetch failed: %s", type(exc).__name__)
@@ -963,13 +978,13 @@ class UpdateMonitor:
 
             exe_match = re.search(
                 r'https://downloadmirror\.intel\.com/\d+/[^\s"\'<>]+\.exe',
-                response.text,
+                html_text,
                 re.I,
             )
             exe_url = exe_match.group(0) if exe_match else None
             html_size_match = re.search(
                 r"(?:Size|大小)\s*[:：]?\s*(?:<[^>]+>\s*)*(\d+(?:\.\d+)?\s*(?:MB|GB))",
-                response.text,
+                html_text,
                 re.I,
             )
             intel_file_size = (
@@ -977,7 +992,7 @@ class UpdateMonitor:
                 or (html_size_match.group(1) if html_size_match else None)
                 or self._probe_file_size(exe_url, INTEL_CN_DOWNLOAD_URL)
             )
-            sha_match = re.search(r"SHA256\s*[:：]?\s*([A-Fa-f0-9]{64})", response.text)
+            sha_match = re.search(r"SHA256\s*[:：]?\s*([A-Fa-f0-9]{64})", html_text)
             intel_sha256 = tpu_top.get("sha256") or (sha_match.group(1).lower() if sha_match else None)
 
             return {
@@ -1059,7 +1074,7 @@ class UpdateMonitor:
             official_url = official_evidence.pop("official_url", OFFICIAL_URLS[vendor])
             evidence.append(official_evidence)
             primary_verified = True
-        except (requests.RequestException, ValueError) as exc:
+        except (requests.RequestException, ValueError, SecurityViolationError) as exc:
             LOGGER.warning("%s official verification failed: %s", vendor, exc)
 
         recent_releases = []
@@ -1219,10 +1234,9 @@ class UpdateMonitor:
         notes_text = ""
         structured: dict[str, list[str]] = {"highlights": [], "fixed_issues": [], "known_issues": []}
         try:
-            notes_response = self.session.get(notes_url, timeout=REQUEST_TIMEOUT)
-            notes_response.raise_for_status()
-            notes_text = _extract_page_text(notes_response.text)
-            structured = parse_release_notes_sections(notes_text, vendor="windows", html=notes_response.text)
+            notes_html = self._get_text_bounded(notes_url)
+            notes_text = _extract_page_text(notes_html)
+            structured = parse_release_notes_sections(notes_text, vendor="windows", html=notes_html)
         except Exception as exc:
             LOGGER.warning("Windows release notes fetch failed: %s", type(exc).__name__)
 
@@ -1352,7 +1366,7 @@ class UpdateMonitor:
     def get_release(self, vendor: str) -> dict[str, Any]:
         try:
             return self.get_windows_release() if vendor == "windows" else self.get_driver_release(vendor)
-        except (requests.RequestException, ValueError) as exc:
+        except (requests.RequestException, ValueError, SecurityViolationError) as exc:
             LOGGER.warning("%s release fetch failed: %s", vendor, exc)
             return {
                 "version": None,

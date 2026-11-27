@@ -1,20 +1,24 @@
 {
   "name": "driveradar-desktop",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "DriveRadar Desktop for Windows — minimalist NVIDIA, AMD, Intel, and Windows 11 update tracker with system tray, native notifications, risk scoring, and automatic updates.",
   "main": "src/main.js",
   "author": "OptLabs",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "check": "node --check src/i18n.js && node --check src/main.js && node --check src/preload.js && node --check src/renderer/renderer.js",
+    "check": "node --check src/security.js && node --check src/i18n.js && node --check src/main.js && node --check src/preload.js && node --check src/renderer/renderer.js",
     "build:win": "electron-builder --config electron-builder.yml --win --x64 --publish never"
   },
   "dependencies": {
-    "electron-updater": "^6.3.9"
+    "electron-updater": "^6.8.11"
   },
   "devDependencies": {
-    "electron": "^33.2.0",
-    "electron-builder": "^25.1.8"
+    "electron": "^45.5.0",
+    "electron-builder": "^26.18.0"
+  },
+  "overrides": {
+    "tar": "^7.5.7",
+    "minimatch": "^11.0.9"
   }
 }

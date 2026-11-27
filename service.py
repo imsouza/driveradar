@@ -29,6 +29,10 @@ from advisor import (
     evaluate_risk_policy,
 )
 from monitor import OFFICIAL_URLS, UpdateMonitor
+from radar_core.application.vote_service import CommunityValidationService
+from radar_core.infrastructure.crypto_tokens import HmacTokenSigner
+from radar_core.infrastructure.rate_limiter import SlidingWindowRateLimiter
+from radar_core.infrastructure.sqlite_vote_repo import SqliteVoteRepository
 from sources import (
     CONFLICT_VERSION_PATTERNS,
     DRIVER_UPDATE_CONTEXT,
@@ -609,6 +613,7 @@ class DriveRadarService:
         cache_ttl: int | None = None,
         monitor: UpdateMonitor | None = None,
         source_hub: SourceHub | None = None,
+        vote_service: CommunityValidationService | None = None,
         use_shared_snapshot: bool = False,
     ) -> None:
         self.store = StateStore(state_path)
@@ -618,6 +623,11 @@ class DriveRadarService:
         self.monitor = monitor or UpdateMonitor()
         self.source_hub = source_hub or SourceHub()
         self.advisor = AIAdvisorPool(self.store.path.with_name("advisor_state.json"))
+        self.votes = vote_service or CommunityValidationService(
+            SqliteVoteRepository(self.store.path.with_name("community_votes.db")),
+            HmacTokenSigner(),
+            SlidingWindowRateLimiter(),
+        )
         self._analysis_evidence: dict[str, list[dict[str, Any]]] = {}
         self._cache: dict[str, Any] | None = None
         self._cache_time = 0.0
@@ -625,11 +635,17 @@ class DriveRadarService:
         self._refresh_lock = asyncio.Lock()
         self._advisor_lock = asyncio.Lock()
         self._history_locks: dict[tuple[str, str], asyncio.Lock] = {}
-        self._cache = self._load_shared_snapshot() if use_shared_snapshot else None
+        warm_snapshot = self._load_shared_snapshot()
+        if warm_snapshot:
+            self._cache = warm_snapshot
+            snap_ts = (warm_snapshot.get("collection") or {}).get("collected_at") or warm_snapshot.get("last_updated") or 0
+            snap_age = max(0, int(time.time()) - int(snap_ts))
+            if use_shared_snapshot or snap_age < self.cache_ttl:
+                self._cache_time = time.monotonic() - min(snap_age, self.cache_ttl)
         if self._cache is None:
             self._cache = self._bootstrap_cache()
-        if self._cache:
-            self._cache_time = time.monotonic()
+            if self._cache:
+                self._cache_time = time.monotonic()
 
     def _read_state_mtime(self) -> float:
         try:
@@ -1036,7 +1052,7 @@ class DriveRadarService:
                 age = max(0, int(time.time()) - int(collected_at))
                 self._cache = shared
                 self._cache_time = time.monotonic() - min(age, self.cache_ttl)
-                response = copy.deepcopy(shared)
+                response = await asyncio.to_thread(self.votes.enrich_payload_with_community, shared)
                 response["cache_age_seconds"] = age
                 return response
 
@@ -1047,14 +1063,14 @@ class DriveRadarService:
                 self._cache["history"] = (await asyncio.to_thread(self.store.read))["history"]
                 self._cache["advisor"] = self.advisor.public_state(self._cache.get("drivers", {}))
                 self._state_mtime = disk_mtime
-            response = copy.deepcopy(self._cache)
+            response = await asyncio.to_thread(self.votes.enrich_payload_with_community, self._cache)
             response["cache_age_seconds"] = int(now - self._cache_time)
             return response
 
         async with self._refresh_lock:
             now = time.monotonic()
             if not force and self._cache and now - self._cache_time < self.cache_ttl:
-                response = copy.deepcopy(self._cache)
+                response = await asyncio.to_thread(self.votes.enrich_payload_with_community, self._cache)
                 response["cache_age_seconds"] = int(now - self._cache_time)
                 return response
             try:
@@ -1067,7 +1083,7 @@ class DriveRadarService:
                 if not self._cache:
                     raise
 
-            response = copy.deepcopy(self._cache)
+            response = await asyncio.to_thread(self.votes.enrich_payload_with_community, self._cache)
             response["cache_age_seconds"] = int(time.monotonic() - self._cache_time)
             return response
 

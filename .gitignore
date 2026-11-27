@@ -7,6 +7,9 @@ __pycache__/
 .ruff_cache/
 cache/*.json
 cache/*.lock
+cache/*.db
+cache/*.db-wal
+cache/*.db-shm
 releases/
 desktop/node_modules/
 desktop/dist/
