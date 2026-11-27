@@ -2,6 +2,8 @@
   'use strict';
 
   const DRIVER_DOWN_TAGS = [
+    ['false_positive', 'vote.tag.false_positive'],
+    ['works_fine', 'vote.tag.works_fine'],
     ['black_screen', 'vote.tag.black_screen'],
     ['crash_bsod', 'vote.tag.crash_bsod'],
     ['fps_drop', 'vote.tag.fps_drop'],
@@ -145,9 +147,9 @@
     row.append(info);
 
     const actions = el('div', 'vote-actions');
-    const upBtn = el('button', `vote-btn up${myVote?.vote === 'up' ? ' active' : ''}`, `👍 ${tr('vote.stableBtn', null, 'Estável')} (${tally.up || 0})`);
+    const upBtn = el('button', `vote-btn up${myVote?.vote === 'up' ? ' active' : ''}`, `👍 ${tr('vote.stableBtn', null, 'Faz sentido')} (${tally.up || 0})`);
     upBtn.type = 'button';
-    const downBtn = el('button', `vote-btn down${myVote?.vote === 'down' ? ' active' : ''}`, `👎 ${tr('vote.issueBtn', null, 'Problema')} (${tally.down || 0})`);
+    const downBtn = el('button', `vote-btn down${myVote?.vote === 'down' ? ' active' : ''}`, `👎 ${tr('vote.issueBtn', null, 'Não faz sentido')} (${tally.down || 0})`);
     downBtn.type = 'button';
     actions.append(upBtn, downBtn);
     row.append(actions);
@@ -155,7 +157,7 @@
 
     const tagPicker = el('div', 'vote-tags-picker');
     tagPicker.hidden = !container._pickingDown;
-    tagPicker.append(el('small', '', tr('vote.pickSymptom', null, 'Qual sintoma ocorreu?')));
+    tagPicker.append(el('small', '', tr('vote.pickSymptom', null, 'Por que não faz sentido?')));
     const tagList = el('div', 'vote-tag-pills');
     DRIVER_DOWN_TAGS.forEach(([tagCode, labelKey]) => {
       const tBtn = el('button', `vote-tag-btn${myVote?.tag === tagCode ? ' active' : ''}`, tr(labelKey, null, tagCode));
@@ -171,7 +173,7 @@
 
     upBtn.addEventListener('click', async () => {
       container._pickingDown = false;
-      await castVote('driver', targetId, 'up', 'stable');
+      await castVote('driver', targetId, 'up', 'makes_sense');
     });
     downBtn.addEventListener('click', () => {
       container._pickingDown = !container._pickingDown;

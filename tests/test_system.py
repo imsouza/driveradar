@@ -1055,7 +1055,7 @@ class SoakMaturityAndSeniorQATests(unittest.TestCase):
     def test_desktop_v140_parity_escalation_and_api_guard_markers(self):
         root = Path(__file__).parents[1]
         pkg = json.loads((root / "desktop/package.json").read_text(encoding="utf-8"))
-        self.assertEqual(pkg["version"], "1.5.0")
+        self.assertEqual(pkg["version"], "1.5.1")
         main_js = (root / "desktop/src/main.js").read_text(encoding="utf-8")
         preload_js = (root / "desktop/src/preload.js").read_text(encoding="utf-8")
         renderer_js = (root / "desktop/src/renderer/renderer.js").read_text(encoding="utf-8")
@@ -1292,7 +1292,7 @@ class CleanArchitectureSecurityAndVotingQATests(unittest.TestCase):
                 )
                 self.assertEqual(ghost_ver.status_code, 400)
 
-                # 6. Valid upvote -> 200, then idempotent flip to downvote with symptom -> up=0, down=1
+                # 6. Valid upvote (makes_sense) -> 200, then idempotent flip to downvote (false_positive) -> up=0, down=1
                 ok_up = client.post(
                     "/driveradar/api/vote",
                     headers={"X-Requested-With": "DriveRadar", "CF-Connecting-IP": "198.51.100.10"},
@@ -1300,7 +1300,7 @@ class CleanArchitectureSecurityAndVotingQATests(unittest.TestCase):
                         "target_type": "driver",
                         "target_id": "nvidia:621.40",
                         "vote": "up",
-                        "reason_tag": "stable",
+                        "reason_tag": "makes_sense",
                         "vote_token": aged_token,
                     },
                 )
@@ -1314,14 +1314,15 @@ class CleanArchitectureSecurityAndVotingQATests(unittest.TestCase):
                         "target_type": "driver",
                         "target_id": "nvidia:621.40",
                         "vote": "down",
-                        "reason_tag": "black_screen",
+                        "reason_tag": "false_positive",
                         "vote_token": aged_token,
                     },
                 )
                 self.assertEqual(ok_flip.status_code, 200)
                 self.assertEqual(ok_flip.json()["tally"]["up"], 0)
                 self.assertEqual(ok_flip.json()["tally"]["down"], 1)
-                self.assertEqual(ok_flip.json()["tally"]["reasons"].get("black_screen"), 1)
+                self.assertEqual(ok_flip.json()["tally"]["reasons"].get("false_positive"), 1)
+                self.assertEqual(ok_flip.json()["tally"]["top_issue"], "false_positive")
 
                 # 7. Subnet Sybil cap: 2nd distinct voter in 198.51.100.0/24 succeeds, 3rd distinct voter in same /24 -> 429
                 c2 = TestClient(web_app.app, raise_server_exceptions=True)

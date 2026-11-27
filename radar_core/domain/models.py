@@ -36,25 +36,33 @@ class VoteDirection(str, Enum):
 
 
 class VoteReasonTag(str, Enum):
+    MAKES_SENSE = "makes_sense"
     STABLE = "stable"
     USEFUL_ALERT = "useful_alert"
+    FALSE_POSITIVE = "false_positive"
+    WORKS_FINE = "works_fine"
     BLACK_SCREEN = "black_screen"
     CRASH_BSOD = "crash_bsod"
     FPS_DROP = "fps_drop"
     INSTALL_FAIL = "install_fail"
     AUDIO_DISPLAY = "audio_display"
-    FALSE_POSITIVE = "false_positive"
     OUTDATED = "outdated"
 
 
 ALLOWED_REASON_TAGS: dict[tuple[VoteTargetType, VoteDirection], frozenset[VoteReasonTag]] = {
-    (VoteTargetType.DRIVER, VoteDirection.UP): frozenset({VoteReasonTag.STABLE}),
+    (VoteTargetType.DRIVER, VoteDirection.UP): frozenset({
+        VoteReasonTag.MAKES_SENSE,
+        VoteReasonTag.STABLE,
+    }),
     (VoteTargetType.DRIVER, VoteDirection.DOWN): frozenset({
+        VoteReasonTag.FALSE_POSITIVE,
+        VoteReasonTag.WORKS_FINE,
         VoteReasonTag.BLACK_SCREEN,
         VoteReasonTag.CRASH_BSOD,
         VoteReasonTag.FPS_DROP,
         VoteReasonTag.INSTALL_FAIL,
         VoteReasonTag.AUDIO_DISPLAY,
+        VoteReasonTag.OUTDATED,
     }),
     (VoteTargetType.ALERT, VoteDirection.UP): frozenset({VoteReasonTag.USEFUL_ALERT}),
     (VoteTargetType.ALERT, VoteDirection.DOWN): frozenset({
@@ -64,8 +72,8 @@ ALLOWED_REASON_TAGS: dict[tuple[VoteTargetType, VoteDirection], frozenset[VoteRe
 }
 
 DEFAULT_REASON_TAG: dict[tuple[VoteTargetType, VoteDirection], VoteReasonTag] = {
-    (VoteTargetType.DRIVER, VoteDirection.UP): VoteReasonTag.STABLE,
-    (VoteTargetType.DRIVER, VoteDirection.DOWN): VoteReasonTag.CRASH_BSOD,
+    (VoteTargetType.DRIVER, VoteDirection.UP): VoteReasonTag.MAKES_SENSE,
+    (VoteTargetType.DRIVER, VoteDirection.DOWN): VoteReasonTag.FALSE_POSITIVE,
     (VoteTargetType.ALERT, VoteDirection.UP): VoteReasonTag.USEFUL_ALERT,
     (VoteTargetType.ALERT, VoteDirection.DOWN): VoteReasonTag.FALSE_POSITIVE,
 }
@@ -165,7 +173,11 @@ class CommunityTally:
         issue_entries = [
             (tag, cnt)
             for tag, cnt in self.reason_counts.items()
-            if tag not in {VoteReasonTag.STABLE.value, VoteReasonTag.USEFUL_ALERT.value} and cnt > 0
+            if tag not in {
+                VoteReasonTag.MAKES_SENSE.value,
+                VoteReasonTag.STABLE.value,
+                VoteReasonTag.USEFUL_ALERT.value,
+            } and cnt > 0
         ]
         if issue_entries:
             issue_entries.sort(key=lambda pair: pair[1], reverse=True)

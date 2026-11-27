@@ -18,6 +18,8 @@ let activeAlertVendor = 'all';
 let toastTimer = null;
 let voteState = { token: '', issuedAt: 0, tallies: {}, myVotes: {}, pending: new Set() };
 const DRIVER_DOWN_TAGS = [
+  ['false_positive', 'vote.tag.false_positive'],
+  ['works_fine', 'vote.tag.works_fine'],
   ['black_screen', 'vote.tag.black_screen'],
   ['crash_bsod', 'vote.tag.crash_bsod'],
   ['fps_drop', 'vote.tag.fps_drop'],
@@ -120,7 +122,7 @@ function buildDriverVoteBar(vendor, version, initialCommunity) {
   picker.append(pills);
   box.append(picker);
 
-  upBtn.addEventListener('click', () => submitDesktopVote('driver', targetId, 'up', 'stable'));
+  upBtn.addEventListener('click', () => submitDesktopVote('driver', targetId, 'up', 'makes_sense'));
   downBtn.addEventListener('click', () => { picker.hidden = !picker.hidden; });
   return box;
 }

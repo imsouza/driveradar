@@ -42,7 +42,7 @@ Core domain rules, security policies, and community telemetry live in `radar_cor
 
 ### Dual-Track / Zero-Override Invariant
 
-Users on both **Web** and **Windows Desktop** can validate Drivers/KBs (*Stable* vs. *Had issues* with structured enum tags: `black_screen`, `crash_tdr`, `fps_stutter`, `install_boot`, `other`) and Security Alerts (*Useful* vs. *False positive*):
+Users on both **Web** and **Windows Desktop** can validate Drivers/KBs (*Makes sense* vs. *Doesn't make sense* with structured enum tags: `false_positive`, `works_fine`, `black_screen`, `crash_bsod`, `fps_drop`, `install_fail`, `audio_display`) and Security Alerts (*Useful* vs. *False positive*):
 
 - Crowd feedback is projected in a dedicated `community` track (`GET /driveradar/api/votes`, `POST /driveradar/api/vote`) and **never** overrides deterministic Crossover verification scores, **never** bypasses the 96-hour soak quarantine, and **never** downgrades confirmed `Critical` (`do_not_install`) verdicts.
 - Zero free-text user input is accepted or rendered, eliminating stored XSS and LLM prompt-injection vectors.
