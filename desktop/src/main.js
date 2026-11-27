@@ -19,12 +19,14 @@ const { SUPPORTED: SUPPORTED_LANGS, resolveLang, t } = require('./i18n');
 const {
   DEFAULT_API_BASE,
   IMMUTABLE_UPDATER_URL,
+  classifyDownloadUrl,
   loadOrCreateVoterProof,
   validateExternalBrowserUrl,
   validateRemoteApiUrl
 } = require('./security');
 
 const APP_ID = 'br.com.optlabs.driveradar';
+const IS_PORTABLE = Boolean(process.env.PORTABLE_EXECUTABLE_FILE);
 const VENDORS = ['nvidia', 'amd', 'intel', 'windows'];
 const VENDOR_LABELS = {
   nvidia: 'NVIDIA GeForce',
@@ -69,6 +71,8 @@ let seenState = { seeded: false, versions: {}, verdicts: {}, conflicts: {}, aler
 let cachedData = null;
 let voterProof = '';
 let updaterStatus = { state: 'idle', version: app.getVersion(), message: '' };
+let activeDownloadItem = null;
+let lastDownloadedFilePath = '';
 
 function curLang() {
   return resolveLang(settings.language, app.getLocale());
@@ -461,10 +465,112 @@ function setUpdaterState(next) {
   sendToRenderer('updater:status', updaterStatus);
 }
 
+function setDownloadState(payload) {
+  sendToRenderer('download:status', payload);
+}
+
+function setupDownloadManager() {
+  session.defaultSession.on('will-download', (_event, item) => {
+    activeDownloadItem = item;
+    const filename = item.getFilename() || 'driver-package.exe';
+    try {
+      item.setSaveDialogOptions({
+        defaultPath: path.join(app.getPath('downloads'), filename)
+      });
+    } catch (_) {}
+
+    setDownloadState({
+      state: 'progress',
+      filename,
+      receivedBytes: 0,
+      totalBytes: item.getTotalBytes() || 0,
+      percent: 0
+    });
+
+    item.on('updated', (_e, state) => {
+      if (state !== 'progressing') return;
+      const received = item.getReceivedBytes() || 0;
+      const total = item.getTotalBytes() || 0;
+      const pct = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.setProgressBar(total > 0 ? received / total : 2);
+      }
+      setDownloadState({
+        state: 'progress',
+        filename: item.getFilename() || filename,
+        receivedBytes: received,
+        totalBytes: total,
+        percent: pct
+      });
+    });
+
+    item.once('done', (_e, state) => {
+      if (activeDownloadItem === item) activeDownloadItem = null;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.setProgressBar(-1);
+      }
+      if (state === 'completed') {
+        lastDownloadedFilePath = item.getSavePath() || '';
+        setDownloadState({
+          state: 'completed',
+          filename: item.getFilename() || filename,
+          savePath: lastDownloadedFilePath,
+          percent: 100
+        });
+      } else if (state === 'cancelled') {
+        setDownloadState({ state: 'idle' });
+      } else {
+        setDownloadState({
+          state: 'failed',
+          filename: item.getFilename() || filename
+        });
+      }
+    });
+  });
+}
+
+async function openOrDownloadUrl(rawUrl) {
+  const classified = classifyDownloadUrl(rawUrl);
+  if (!classified) return { ok: false };
+  if (classified.isDirectBinary) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (!mainWindow.isVisible()) mainWindow.show();
+      mainWindow.focus();
+    }
+    setDownloadState({
+      state: 'starting',
+      filename: classified.filename,
+      percent: 0
+    });
+    const opts = classified.headers ? { headers: classified.headers } : undefined;
+    session.defaultSession.downloadURL(classified.url, opts);
+    return { ok: true, mode: 'download', filename: classified.filename };
+  }
+  try {
+    await shell.openExternal(classified.url, { activate: true });
+    return { ok: true, mode: 'browser' };
+  } catch (_) {
+    return { ok: false };
+  }
+}
+
+function compareSemver(a, b) {
+  const pa = String(a || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i += 1) {
+    if ((pa[i] || 0) > (pb[i] || 0)) return 1;
+    if ((pa[i] || 0) < (pb[i] || 0)) return -1;
+  }
+  return 0;
+}
+
 function setupAutoUpdater() {
+  if (IS_PORTABLE) return;
   try {
     autoUpdater.setFeedURL({ provider: 'generic', url: IMMUTABLE_UPDATER_URL });
   } catch (_) {}
+  autoUpdater.disableDifferentialDownload = true;
+  autoUpdater.disableWebInstaller = true;
   autoUpdater.autoDownload = settings.autoDownloadUpdates;
   autoUpdater.autoInstallOnAppQuit = true;
 
@@ -472,23 +578,33 @@ function setupAutoUpdater() {
     setUpdaterState({ state: 'checking', message: msg('upd.checking') });
   });
   autoUpdater.on('update-available', (info) => {
-    setUpdaterState({
-      state: 'available',
-      availableVersion: info.version,
-      message: msg('upd.available', { version: info.version })
-    });
-    if (!settings.autoDownloadUpdates && settings.notificationsEnabled) {
-      fireNotification(msg('upd.notifAvailTitle'), msg('upd.notifAvailBody', { version: info.version }), () => showWindow('settings'));
+    if (settings.autoDownloadUpdates) {
+      setUpdaterState({
+        state: 'downloading',
+        availableVersion: info.version,
+        percent: 0,
+        message: msg('upd.downloading', { percent: 0 })
+      });
+    } else {
+      setUpdaterState({
+        state: 'available',
+        availableVersion: info.version,
+        message: msg('upd.available', { version: info.version })
+      });
+      if (settings.notificationsEnabled) {
+        fireNotification(msg('upd.notifAvailTitle'), msg('upd.notifAvailBody', { version: info.version }), () => showWindow('settings'));
+      }
     }
   });
   autoUpdater.on('update-not-available', () => {
     setUpdaterState({ state: 'up-to-date', message: msg('upd.upToDate', { version: app.getVersion() }) });
   });
   autoUpdater.on('download-progress', (prog) => {
+    const pct = Math.round(prog.percent || 0);
     setUpdaterState({
       state: 'downloading',
-      percent: Math.round(prog.percent || 0),
-      message: msg('upd.downloading', { percent: Math.round(prog.percent || 0) })
+      percent: pct,
+      message: msg('upd.downloading', { percent: pct })
     });
   });
   autoUpdater.on('update-downloaded', (info) => {
@@ -513,6 +629,31 @@ async function checkForAppUpdates(manual = false) {
       state: 'up-to-date',
       message: manual ? msg('upd.devMode') : ''
     });
+    return updaterStatus;
+  }
+  if (IS_PORTABLE) {
+    setUpdaterState({ state: 'checking', message: msg('upd.checking') });
+    try {
+      const resp = await net.fetch(`${IMMUTABLE_UPDATER_URL}latest.yml?noCache=${Date.now()}`, {
+        signal: AbortSignal.timeout(10_000)
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const text = await resp.text();
+      const verMatch = text.match(/^\s*version:\s*['"]?([0-9]+\.[0-9]+\.[0-9]+)['"]?/m);
+      const remoteVer = verMatch ? verMatch[1] : null;
+      if (remoteVer && compareSemver(remoteVer, app.getVersion()) > 0) {
+        setUpdaterState({
+          state: 'available',
+          availableVersion: remoteVer,
+          portable: true,
+          message: msg('upd.available', { version: remoteVer })
+        });
+      } else {
+        setUpdaterState({ state: 'up-to-date', message: msg('upd.upToDate', { version: app.getVersion() }) });
+      }
+    } catch (err) {
+      setUpdaterState({ state: 'error', message: msg('upd.error', { msg: err?.message || 'network' }) });
+    }
     return updaterStatus;
   }
   autoUpdater.autoDownload = settings.autoDownloadUpdates;
@@ -682,20 +823,49 @@ function registerIpc() {
   ipcMain.handle('updater:check', () => checkForAppUpdates(true));
   ipcMain.handle('updater:download', async () => {
     if (!app.isPackaged) return updaterStatus;
-    await autoUpdater.downloadUpdate();
+    if (IS_PORTABLE && updaterStatus.availableVersion) {
+      const portableUrl = `${IMMUTABLE_UPDATER_URL}DriveRadar-Portable-${updaterStatus.availableVersion}.exe`;
+      setUpdaterState({ state: 'idle', message: '' });
+      await openOrDownloadUrl(portableUrl);
+      return updaterStatus;
+    }
+    setUpdaterState({
+      state: 'downloading',
+      percent: updaterStatus.percent || 0,
+      message: msg('upd.downloading', { percent: updaterStatus.percent || 0 })
+    });
+    try {
+      await autoUpdater.downloadUpdate();
+    } catch (err) {
+      setUpdaterState({ state: 'error', message: msg('upd.error', { msg: err?.message || 'network' }) });
+    }
     return updaterStatus;
   });
   ipcMain.handle('updater:install', () => {
-    if (!app.isPackaged) return false;
+    if (!app.isPackaged || IS_PORTABLE) return false;
     isQuitting = true;
     autoUpdater.quitAndInstall(false, true);
     return true;
   });
-  ipcMain.handle('shell:openExternal', (_event, rawUrl) => {
-    const safeHref = validateExternalBrowserUrl(rawUrl);
-    if (!safeHref) return false;
-    shell.openExternal(safeHref);
-    return true;
+  ipcMain.handle('driver:download', (_event, rawUrl) => openOrDownloadUrl(rawUrl));
+  ipcMain.handle('download:reveal', () => {
+    if (lastDownloadedFilePath && fs.existsSync(lastDownloadedFilePath)) {
+      shell.showItemInFolder(lastDownloadedFilePath);
+      return true;
+    }
+    return false;
+  });
+  ipcMain.handle('download:cancel', () => {
+    if (activeDownloadItem) {
+      try { activeDownloadItem.cancel(); } catch (_) {}
+      activeDownloadItem = null;
+      return true;
+    }
+    return false;
+  });
+  ipcMain.handle('shell:openExternal', async (_event, rawUrl) => {
+    const res = await openOrDownloadUrl(rawUrl);
+    return Boolean(res?.ok);
   });
 }
 
@@ -708,6 +878,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     session.defaultSession.setPermissionRequestHandler((_wc, _perm, callback) => callback(false));
     session.defaultSession.setPermissionCheckHandler(() => false);
+    setupDownloadManager();
     settings = mergeSettings(readJson(userFile('settings.json'), DEFAULT_SETTINGS));
     voterProof = loadOrCreateVoterProof(safeStorage, userFile('voter_proof.json'));
     seenState = { ...seenState, ...readJson(userFile('state.json'), {}) };

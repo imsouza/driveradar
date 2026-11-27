@@ -8,6 +8,7 @@ const netModule = require('net');
 const DEFAULT_API_BASE = 'https://optlabs.com.br/driveradar';
 const IMMUTABLE_UPDATER_URL = 'https://optlabs.com.br/driveradar/updates/';
 const FORBIDDEN_HOST_SUFFIXES = ['.local', '.internal', '.localhost', '.lan', '.arpa'];
+const DIRECT_BINARY_EXTS = ['.exe', '.msi', '.msu', '.cab', '.zip', '.7z'];
 
 function isPrivateOrReservedIp(ip) {
   const version = netModule.isIP(ip);
@@ -115,9 +116,31 @@ function loadOrCreateVoterProof(safeStorage, filePath) {
   return freshProof;
 }
 
+function classifyDownloadUrl(rawUrl) {
+  const safeHref = validateExternalBrowserUrl(rawUrl);
+  if (!safeHref) return null;
+  const parsed = new URL(safeHref);
+  const host = parsed.hostname.toLowerCase();
+  const pathname = parsed.pathname || '';
+  const lowerPath = pathname.toLowerCase();
+  const isDirectBinary = DIRECT_BINARY_EXTS.some((ext) => lowerPath.endsWith(ext));
+  const rawBase = path.posix.basename(pathname);
+  const filename = /^[A-Za-z0-9._-]{3,160}$/.test(rawBase) ? rawBase : 'driver-package.exe';
+  const headers = (host === 'amd.com' || host.endsWith('.amd.com'))
+    ? { Referer: 'https://www.amd.com/' }
+    : null;
+  return {
+    url: safeHref,
+    isDirectBinary,
+    filename,
+    headers
+  };
+}
+
 module.exports = {
   DEFAULT_API_BASE,
   IMMUTABLE_UPDATER_URL,
+  classifyDownloadUrl,
   isPrivateOrReservedHost,
   isPrivateOrReservedIp,
   loadOrCreateVoterProof,

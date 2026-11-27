@@ -14,7 +14,7 @@
         <span class="brand-dot" aria-hidden="true"></span>
         <div>
           <strong>DriveRadar</strong>
-          <small id="app-version">v1.5.1</small>
+          <small id="app-version">v1.5.2</small>
         </div>
       </div>
       <nav class="nav-list" aria-label="Navegação">
@@ -38,10 +38,25 @@
 
     <div class="main-area">
       <div class="update-banner" id="update-banner" hidden>
-        <span id="update-banner-text"></span>
+        <div class="banner-info">
+          <span id="update-banner-text"></span>
+          <progress class="meter-progress banner-progress" id="update-banner-progress" max="100" value="0" hidden></progress>
+        </div>
         <div class="banner-actions">
           <button class="btn-accent" id="banner-download" type="button" hidden>Baixar</button>
           <button class="btn-accent" id="banner-install" type="button" hidden>Reiniciar e instalar</button>
+        </div>
+      </div>
+
+      <div class="update-banner download-banner" id="download-banner" hidden>
+        <div class="banner-info">
+          <span id="download-banner-text"></span>
+          <progress class="meter-progress banner-progress" id="download-banner-progress" max="100" value="0" hidden></progress>
+        </div>
+        <div class="banner-actions">
+          <button class="btn-accent" id="download-reveal" type="button" hidden>Mostrar na pasta</button>
+          <button class="btn-outline" id="download-cancel" type="button" hidden>Cancelar</button>
+          <button class="btn-outline" id="download-dismiss" type="button" hidden>✕</button>
         </div>
       </div>
 

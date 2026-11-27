@@ -1055,7 +1055,7 @@ class SoakMaturityAndSeniorQATests(unittest.TestCase):
     def test_desktop_v140_parity_escalation_and_api_guard_markers(self):
         root = Path(__file__).parents[1]
         pkg = json.loads((root / "desktop/package.json").read_text(encoding="utf-8"))
-        self.assertEqual(pkg["version"], "1.5.1")
+        self.assertEqual(pkg["version"], "1.5.2")
         main_js = (root / "desktop/src/main.js").read_text(encoding="utf-8")
         preload_js = (root / "desktop/src/preload.js").read_text(encoding="utf-8")
         renderer_js = (root / "desktop/src/renderer/renderer.js").read_text(encoding="utf-8")
@@ -1405,6 +1405,15 @@ class CleanArchitectureSecurityAndVotingQATests(unittest.TestCase):
         assert.strictEqual(sec.validateExternalBrowserUrl('javascript:alert(1)'), null);
         assert.strictEqual(sec.validateExternalBrowserUrl('https://127.0.0.1/admin'), null);
         assert.strictEqual(sec.validateExternalBrowserUrl('https://user:pass@www.nvidia.com/drivers'), null);
+
+        const nvDl = sec.classifyDownloadUrl('https://us.download.nvidia.com/Windows/621.40/621.40-desktop-win10-win11-64bit-international-dch-whql.exe');
+        assert.strictEqual(nvDl.isDirectBinary, true);
+        assert.strictEqual(nvDl.headers, null);
+        const amdDl = sec.classifyDownloadUrl('https://drivers.amd.com/drivers/whql-amd-software-adrenalin-edition-26.11.2-win11-b.exe');
+        assert.strictEqual(amdDl.isDirectBinary, true);
+        assert.deepStrictEqual(amdDl.headers, { Referer: 'https://www.amd.com/' });
+        const winPage = sec.classifyDownloadUrl('https://support.microsoft.com/help/5132057');
+        assert.strictEqual(winPage.isDirectBinary, false);
 
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dr-sec-'));
         const proofFile = path.join(tmpDir, 'voter_proof.json');

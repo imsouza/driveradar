@@ -21,8 +21,12 @@ contextBridge.exposeInMainWorld('driveRadar', {
   checkAppUpdates: () => ipcRenderer.invoke('updater:check'),
   downloadAppUpdate: () => ipcRenderer.invoke('updater:download'),
   installAppUpdate: () => ipcRenderer.invoke('updater:install'),
+  downloadDriver: (url) => ipcRenderer.invoke('driver:download', url),
+  revealDownloadedFile: () => ipcRenderer.invoke('download:reveal'),
+  cancelDriverDownload: () => ipcRenderer.invoke('download:cancel'),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
   onDataUpdated: (cb) => subscribe('data:updated', cb),
   onUpdaterStatus: (cb) => subscribe('updater:status', cb),
+  onDownloadStatus: (cb) => subscribe('download:status', cb),
   onNavigate: (cb) => subscribe('app:navigate', cb)
 });

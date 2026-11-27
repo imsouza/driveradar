@@ -549,7 +549,10 @@ function renderDriver(vendor, data, assessment, advisorStatus) {
 
   const actions = node('div', 'card-actions');
   const links = node('div', 'card-action-links');
-  links.append(externalLink(vendor === 'windows' ? tr('card.officialUpdate') : tr('card.officialDownload'), data.official_url, 'primary-link'));
+  const webDownloadUrl = (vendor === 'amd' && String(data.official_url || '').includes('drivers.amd.com/'))
+    ? (data.source_url || 'https://www.amd.com/en/support/download/drivers.html')
+    : data.official_url;
+  links.append(externalLink(vendor === 'windows' ? tr('card.officialUpdate') : tr('card.officialDownload'), webDownloadUrl, 'primary-link'));
   if (data.release_notes_url) {
     links.append(externalLink(tr('card.officialNotes'), data.release_notes_url, 'secondary-link'));
   }

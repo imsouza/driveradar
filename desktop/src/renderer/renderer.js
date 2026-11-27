@@ -292,6 +292,8 @@ function applyStaticLabels() {
   $('#btn-refresh').textContent = tr('btn.refresh');
   $('#banner-download').textContent = tr('banner.download');
   $('#banner-install').textContent = tr('banner.install');
+  $('#download-reveal').textContent = tr('dl.showFolder');
+  $('#download-cancel').textContent = tr('dl.cancel');
   $('#tab-drivers h1').textContent = tr('drivers.title');
   $('#drivers-subtitle').textContent = tr('drivers.subtitle');
   $('#drivers-tip-title').textContent = tr('drivers.waitTipTitle');
@@ -499,7 +501,7 @@ function renderDrivers(data) {
     if (item.official_url) {
       const dl = node('button', 'link-btn', vendor === 'windows' ? tr('drivers.officialPage') : tr('drivers.download'));
       dl.type = 'button';
-      dl.addEventListener('click', () => window.driveRadar.openExternal(item.official_url));
+      dl.addEventListener('click', () => window.driveRadar.downloadDriver(item.official_url));
       links.append(dl);
     }
     if (item.release_notes_url) {
@@ -734,7 +736,7 @@ function populateDialog(vendor, item, isLoading) {
   if (item.official_url) {
     const dlBtn = node('button', 'link-btn muted', tr('dialog.officialPage'));
     dlBtn.type = 'button';
-    dlBtn.addEventListener('click', () => window.driveRadar.openExternal(item.official_url));
+    dlBtn.addEventListener('click', () => window.driveRadar.downloadDriver(item.official_url));
     foot.append(dlBtn);
   }
   if (foot.children.length) body.append(foot);
@@ -1109,9 +1111,65 @@ function renderAbout() {
   root.append(appSec);
 }
 
+function formatBytes(bytes) {
+  const n = Number(bytes || 0);
+  if (n >= 1024 * 1024 * 1024) return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(0)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${n} B`;
+}
+
+function renderDownloadBanner(status) {
+  const banner = $('#download-banner');
+  const text = $('#download-banner-text');
+  const prog = $('#download-banner-progress');
+  const revealBtn = $('#download-reveal');
+  const cancelBtn = $('#download-cancel');
+  const dismissBtn = $('#download-dismiss');
+  if (!banner || !status || status.state === 'idle') {
+    if (banner) banner.hidden = true;
+    return;
+  }
+  banner.hidden = false;
+  const file = status.filename || 'driver.exe';
+  if (status.state === 'starting') {
+    text.textContent = tr('dl.starting', { file });
+    prog.hidden = false;
+    prog.value = 2;
+    revealBtn.hidden = true;
+    cancelBtn.hidden = false;
+    dismissBtn.hidden = true;
+  } else if (status.state === 'progress') {
+    text.textContent = tr('dl.progress', {
+      file,
+      percent: status.percent || 0,
+      done: formatBytes(status.receivedBytes),
+      total: status.totalBytes ? formatBytes(status.totalBytes) : '…'
+    });
+    prog.hidden = false;
+    prog.value = Math.max(2, Number(status.percent || 0));
+    revealBtn.hidden = true;
+    cancelBtn.hidden = false;
+    dismissBtn.hidden = true;
+  } else if (status.state === 'completed') {
+    text.textContent = tr('dl.completed', { file });
+    prog.hidden = true;
+    revealBtn.hidden = false;
+    cancelBtn.hidden = true;
+    dismissBtn.hidden = false;
+  } else if (status.state === 'failed') {
+    text.textContent = tr('dl.failed', { file });
+    prog.hidden = true;
+    revealBtn.hidden = true;
+    cancelBtn.hidden = true;
+    dismissBtn.hidden = false;
+  }
+}
+
 function renderUpdaterBanner(status) {
   const banner = $('#update-banner');
   const text = $('#update-banner-text');
+  const prog = $('#update-banner-progress');
   const dlBtn = $('#banner-download');
   const instBtn = $('#banner-install');
   const msgEl = $('#settings-updater-msg');
@@ -1119,12 +1177,22 @@ function renderUpdaterBanner(status) {
   if (msgEl && status?.message) msgEl.textContent = status.message;
   if (settingsInstBtn) settingsInstBtn.hidden = status?.state !== 'downloaded';
 
-  if (!status || !['available', 'downloading', 'downloaded'].includes(status.state)) {
+  if (!status || !['available', 'downloading', 'downloaded', 'error'].includes(status.state)) {
     banner.hidden = true;
+    return;
+  }
+  if (status.state === 'error' && banner.hidden) {
     return;
   }
   banner.hidden = false;
   text.textContent = status.message || '';
+  if (prog) {
+    prog.hidden = status.state !== 'downloading';
+    if (status.state === 'downloading') {
+      prog.value = Math.max(3, Number(status.percent || 0));
+    }
+  }
+  dlBtn.disabled = status.state === 'downloading';
   dlBtn.hidden = status.state !== 'available';
   instBtn.hidden = status.state !== 'downloaded';
 }
@@ -1160,11 +1228,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('#history-dialog').addEventListener('click', (e) => {
     if (e.target === $('#history-dialog')) $('#history-dialog').close();
   });
-  $('#banner-download').addEventListener('click', () => window.driveRadar.downloadAppUpdate());
+  $('#banner-download').addEventListener('click', () => {
+    $('#banner-download').disabled = true;
+    window.driveRadar.downloadAppUpdate();
+  });
   $('#banner-install').addEventListener('click', () => window.driveRadar.installAppUpdate());
+  $('#download-reveal').addEventListener('click', () => window.driveRadar.revealDownloadedFile());
+  $('#download-cancel').addEventListener('click', () => window.driveRadar.cancelDriverDownload());
+  $('#download-dismiss').addEventListener('click', () => { $('#download-banner').hidden = true; });
 
   window.driveRadar.onDataUpdated((data) => renderAll(data));
   window.driveRadar.onUpdaterStatus((status) => renderUpdaterBanner(status));
+  window.driveRadar.onDownloadStatus((status) => renderDownloadBanner(status));
   window.driveRadar.onNavigate((tab) => switchTab(tab));
 
   currentSettings = await window.driveRadar.getSettings();
